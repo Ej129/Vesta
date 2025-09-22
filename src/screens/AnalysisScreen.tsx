@@ -38,8 +38,7 @@ import {
   NOTES:
   - Replace the existing file with this one.
   - Ensure `docx` and `jspdf` are installed: npm i docx jspdf
-  - This component keeps prior app logic but modifies the header layout and
-    places Actionable Findings on the right as collapsible cards.
+  - Header updated to two rows per user's spec.
   -------------------------------------------------------------------------- */
 
 /* -------------------- Utilities & Sanitizer -------------------- */
@@ -788,7 +787,7 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
 
   return (
     <div className="relative h-full bg-gray-50 min-h-screen">
-      {/* Back button */}
+      {/* Back button (kept for convenience) */}
       <div className="absolute top-4 left-4 z-20">
         <BackButton onBack={handleBack} />
       </div>
@@ -804,73 +803,73 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
         </div>
       )}
 
-          {/* Header: Workspace, Title, Scores, Auto-Enhance in one row */}
-    <header className="w-full bg-white border-b shadow-sm">
-      <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between gap-10">
-        
-        {/* Workspace + Title inline */}
-        <div className="flex items-center gap-4 min-w-[300px]">
-          <p className="text-sm font-medium text-gray-500">
-            {currentReport.workspaceId
-              ? currentReport.workspaceId.replace("-", " ").toUpperCase()
-              : "CURRENT WORKSPACE"}
-          </p>
-          <input
-            type="text"
-            value={currentReport.title}
-            onChange={(e) =>
-              setCurrentReport({ ...currentReport, title: e.target.value })
-            }
-            onBlur={() => saveReportTitle(currentReport.id, currentReport.title)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") e.currentTarget.blur();
-            }}
-            className="text-lg font-bold text-gray-900 border-none focus:outline-none focus:ring-0 bg-transparent"
-          />
-        </div>
+      {/* Header (two rows) */}
+      <header className="w-full bg-white border-b shadow-sm">
+        <div className="max-w-7xl mx-auto px-6 py-3 space-y-3">
+          {/* Top row: Workspace label (left), Scores (center), Auto-Enhance (right) */}
+          <div className="flex items-center justify-between">
+            {/* Left */}
+            <div className="flex items-center gap-3 min-w-[200px]">
+              <p className="text-sm text-gray-500 font-medium">CURRENT WORKSPACE</p>
+              <p className="text-sm text-gray-700 font-semibold truncate">{currentWorkspace?.name ?? (currentReport.workspaceId ? currentReport.workspaceId.replace("-", " ").toUpperCase() : "")}</p>
+            </div>
 
-        {/* Scores in the middle */}
-        <div className="flex flex-1 justify-center gap-12">
-          <div className="text-center">
-            <p className="text-sm text-gray-600">Project Score</p>
-            <p className="font-bold text-green-600">
-              {currentReport.scores?.project ?? 100}%
-            </p>
+            {/* Center - Scores */}
+            <div className="flex items-center gap-10 justify-center flex-1 max-w-3xl">
+              <div className="text-center">
+                <p className="text-sm text-gray-600">Project Score</p>
+                <p className="font-bold text-green-600">{currentReport.scores?.project ?? 100}%</p>
+              </div>
+              <div className="text-center">
+                <p className="text-sm text-gray-600">Strategic Goals</p>
+                <p className="font-bold text-green-600">{currentReport.scores?.strategicGoals ?? 100}%</p>
+              </div>
+              <div className="text-center">
+                <p className="text-sm text-gray-600">Regulations</p>
+                <p className="font-bold text-green-600">{currentReport.scores?.regulations ?? 100}%</p>
+              </div>
+              <div className="text-center">
+                <p className="text-sm text-gray-600">Risk Mitigation</p>
+                <p className="font-bold text-green-600">{currentReport.scores?.risk ?? 100}%</p>
+              </div>
+            </div>
+
+            {/* Right */}
+            <div className="flex-shrink-0">
+              <button
+                onClick={handleAutoEnhance}
+                disabled={isEnhancing}
+                className="px-5 py-2 rounded-lg bg-red-600 text-white font-bold shadow hover:bg-red-700 disabled:opacity-60"
+                aria-label="Auto Enhance"
+              >
+                Auto-Enhance
+              </button>
+            </div>
           </div>
-          <div className="text-center">
-            <p className="text-sm text-gray-600">Strategic Goals</p>
-            <p className="font-bold text-green-600">
-              {currentReport.scores?.strategicGoals ?? 100}%
-            </p>
-          </div>
-          <div className="text-center">
-            <p className="text-sm text-gray-600">Regulations</p>
-            <p className="font-bold text-green-600">
-              {currentReport.scores?.regulations ?? 100}%
-            </p>
-          </div>
-          <div className="text-center">
-            <p className="text-sm text-gray-600">Risk Mitigation</p>
-            <p className="font-bold text-green-600">
-              {currentReport.scores?.risk ?? 100}%
-            </p>
+
+          {/* Second row: Workspace ID / Title (left) and download/edit (right) */}
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4 min-w-0">
+              <BackButton onBack={handleBack} />
+              <p className="text-xs text-gray-500">{currentReport.workspaceId ?? ""}</p>
+              <h2 className="text-xl font-bold text-gray-900 truncate">{currentReport.title}</h2>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <DownloadDropdown onDownloadPdf={handleDownloadPdf} onDownloadTxt={handleDownloadTxt} onDownloadDocx={handleDownloadDocx} />
+              {isEditing ? (
+                <button onClick={handleSaveChanges} className="px-4 py-2 rounded-lg bg-red-600 text-white font-semibold">Save Draft</button>
+              ) : (
+                <button onClick={() => setIsEditing((s) => !s)} className="px-4 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-800 font-semibold flex items-center gap-2">
+                  <EditIcon className="w-4 h-4" /> Edit
+                </button>
+              )}
+            </div>
           </div>
         </div>
+      </header>
 
-        {/* Auto-Enhance button */}
-        <div>
-          <button
-            onClick={handleAutoEnhance}
-            disabled={isEnhancing}
-            className="px-5 py-2 rounded-lg bg-red-600 text-white font-bold shadow hover:bg-red-700 disabled:opacity-60"
-          >
-            Auto-Enhance
-          </button>
-        </div>
-      </div>
-    </header>
-
-      {/* Main content grid: Document(left; span2), Actionable Findings + Chat (right) */}
+      {/* Main content grid: Document (left; span2), Findings + Chat (right) */}
       <main className="max-w-7xl mx-auto p-6 grid grid-cols-1 xl:grid-cols-3 gap-6">
         {/* Document area (span 2) */}
         <section className="xl:col-span-2">
@@ -890,7 +889,6 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
 
         {/* Right column */}
         <aside className="xl:col-span-1 space-y-6">
-          {/* Actionable Findings */}
           <div className="bg-white rounded-xl shadow p-4 border">
             <h4 className="font-bold">Actionable Findings ({activeFindings.length})</h4>
             <div className="mt-3">
