@@ -279,14 +279,43 @@ const TopNavbar: React.FC<Pick<LayoutProps, 'currentWorkspace'>> =
     }
 
     return (
-        <header className="bg-white dark:bg-neutral-900 px-6 border-b border-gray-200 dark:border-neutral-800 flex justify-between items-center flex-shrink-0 z-10 h-[73px]">
-            <div>
-                <p className="text-sm text-gray-500 dark:text-neutral-500">Current Workspace</p>
+        <header className="bg-white dark:bg-neutral-900 px-6 border-b border-gray-200 dark:border-neutral-800 flex items-center justify-between flex-shrink-0 z-10 h-[73px]">
+            {/* Left: Workspace name */}
+            <div className="flex items-center gap-3">
+                <span className="text-sm text-gray-500 dark:text-neutral-500">Current Workspace:</span>
                 <h1 className="text-lg font-bold text-gray-800 dark:text-neutral-50">{currentWorkspace.name}</h1>
             </div>
+
+            {/* Center: Project Scores */}
+            <div className="flex gap-8 items-center">
+                <div className="text-center">
+                    <p className="text-xs text-gray-500">Project Score</p>
+                    <p className="font-bold text-green-600">100%</p>
+                </div>
+                <div className="text-center">
+                    <p className="text-xs text-gray-500">Strategic Goals</p>
+                    <p className="font-bold text-green-600">100%</p>
+                </div>
+                <div className="text-center">
+                    <p className="text-xs text-gray-500">Regulations</p>
+                    <p className="font-bold text-green-600">100%</p>
+                </div>
+                <div className="text-center">
+                    <p className="text-xs text-gray-500">Risk Mitigation</p>
+                    <p className="font-bold text-green-600">100%</p>
+                </div>
+            </div>
+
+            {/* Right: Auto Enhance button */}
+            <button
+                className="px-5 py-2 rounded-lg bg-red-600 text-white font-bold shadow hover:bg-red-700 disabled:opacity-60"
+            >
+                Auto-Enhance
+            </button>
         </header>
     );
 };
+
 
 
 export const Layout: React.FC<LayoutProps> = (props) => {
