@@ -272,10 +272,13 @@ const WorkspaceSidebar: React.FC<Pick<LayoutProps, 'currentUser' | 'onLogout' | 
     );
 };
 
-const TopNavbar: React.FC<Pick<LayoutProps, 'currentWorkspace'>> = 
-({ currentWorkspace }) => {
-    // Minimal global top bar: workspace name only.
-    // Detailed Analysis header (scores, Auto-Enhance, document actions) should live inside AnalysisScreen.
+const TopNavbar: React.FC<Pick<LayoutProps, 'currentWorkspace'> & { currentScreen: Screen }> = 
+({ currentWorkspace, currentScreen }) => {
+    // Hide top bar entirely on AnalysisScreen
+    if (currentScreen === Screen.Analysis) {
+        return null;
+    }
+
     if (!currentWorkspace) {
         return <header className="bg-white dark:bg-neutral-900 h-[73px] px-6 border-b border-gray-200 dark:border-neutral-800 flex-shrink-0 z-10" />;
     }
@@ -290,8 +293,9 @@ const TopNavbar: React.FC<Pick<LayoutProps, 'currentWorkspace'>> =
     );
 };
 
-export const Layout: React.FC<LayoutProps> = (props) => {
-    const { children } = props;
+
+export const Layout: React.FC<LayoutProps & { currentScreen: Screen }> = (props) => {
+    const { children, currentScreen } = props;
     const [isSidebarCollapsed, setSidebarCollapsed] = useState(localStorage.getItem('vesta-sidebar-collapsed') === 'true');
 
     const handleToggleCollapse = () => {
@@ -304,7 +308,7 @@ export const Layout: React.FC<LayoutProps> = (props) => {
         <div className="flex h-screen bg-gray-100 dark:bg-neutral-950 overflow-hidden">
             <WorkspaceSidebar {...props} isCollapsed={isSidebarCollapsed} onToggleCollapse={handleToggleCollapse} />
             <div className="flex-1 flex flex-col overflow-hidden">
-            <TopNavbar currentWorkspace={props.currentWorkspace} />
+                <TopNavbar currentWorkspace={props.currentWorkspace} currentScreen={currentScreen} />
                 <main className="flex-1 overflow-y-auto">
                     {children}
                 </main>
@@ -312,6 +316,7 @@ export const Layout: React.FC<LayoutProps> = (props) => {
         </div>
     );
 };
+
 
 export const CenteredLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-neutral-950 font-sans p-4">
