@@ -19,6 +19,8 @@ export interface Finding {
   title: string;
   severity: Severity;
   sourceSnippet: string;
+  description?: string;
+  regulation?: string;
   recommendation: string;
   status: FindingStatus;
 }
