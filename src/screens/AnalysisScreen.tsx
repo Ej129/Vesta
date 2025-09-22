@@ -755,6 +755,25 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
     }
   };
 
+  // Helper: saveReportTitle -> updates local state and calls onUpdateReport
+  async function saveReportTitle(reportId?: string, newTitle?: string) {
+    if (!currentReport) return;
+    try {
+      const updatedReport = { ...currentReport, title: newTitle ?? currentReport.title };
+      setCurrentReport(updatedReport);
+      // call parent updater so the change persists upward
+      try {
+        onUpdateReport(updatedReport);
+      } catch (err) {
+        console.warn("onUpdateReport failed in saveReportTitle:", err);
+      }
+      // Optionally: call a backend endpoint to persist the title
+      // await workspaceApi.updateReportTitle?.(reportId, { title: newTitle });
+    } catch (err) {
+      console.error("Failed to save report title:", err);
+    }
+  }
+
   if (!currentReport) {
     return (
       <div className="flex flex-col items-center justify-center h-full p-8">
@@ -785,17 +804,33 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
         </div>
       )}
 
-      {/* Header: Workspace left, Metrics center, Auto-Enhance right */}
+      {/* Header: Workspace left, Editable Title + Metrics center, Auto-Enhance right */}
       <header className="w-full bg-white border-b shadow-sm">
         <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
-          {/* Left */}
-          <div>
-            <p className="text-xs text-gray-500">{currentReport.workspaceId ? currentReport.workspaceId.replace("-", " ").toUpperCase() : "CURRENT WORKSPACE"}</p>
-            <h1 className="text-xl font-bold text-gray-900">{currentReport.title}</h1>
+          {/* Left: Workspace label */}
+          <div className="mr-6 min-w-0">
+            <p className="text-xs text-gray-500">
+              {currentReport.workspaceId ? currentReport.workspaceId.replace("-", " ").toUpperCase() : "CURRENT WORKSPACE"}
+            </p>
+            {/* Editable Title */}
+            <input
+              type="text"
+              value={currentReport.title}
+              onChange={(e) => setCurrentReport({ ...currentReport, title: e.target.value })}
+              onBlur={() => saveReportTitle(currentReport.id, currentReport.title)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  // blur to trigger save
+                  (e.target as HTMLInputElement).blur();
+                }
+              }}
+              className="text-xl font-bold text-gray-900 border-none focus:outline-none focus:ring-0 bg-transparent w-full truncate"
+              aria-label="Edit document title"
+            />
           </div>
 
           {/* Center metrics (aligned to app matrix) */}
-          <div className="flex gap-8 items-center">
+          <div className="flex gap-8 items-center justify-center">
             <div className="text-center">
               <p className="text-sm text-gray-600">Project Score</p>
               <p className="font-bold text-green-600">{currentReport.scores?.project ?? 100}%</p>
@@ -815,7 +850,7 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
           </div>
 
           {/* Right */}
-          <div>
+          <div className="ml-6">
             <button
               onClick={handleAutoEnhance}
               disabled={isEnhancing}
