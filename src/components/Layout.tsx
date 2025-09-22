@@ -272,45 +272,23 @@ const WorkspaceSidebar: React.FC<Pick<LayoutProps, 'currentUser' | 'onLogout' | 
     );
 };
 
-const TopNavbar: React.FC<Pick<LayoutProps, 'currentWorkspace' | 'navigateTo'>> = 
-({ currentWorkspace, navigateTo }) => {
+const TopNavbar: React.FC<Pick<LayoutProps, 'currentWorkspace'>> = 
+({ currentWorkspace }) => {
+    // Minimal global top bar: workspace name only.
+    // Detailed Analysis header (scores, Auto-Enhance, document actions) should live inside AnalysisScreen.
     if (!currentWorkspace) {
         return <header className="bg-white dark:bg-neutral-900 h-[73px] px-6 border-b border-gray-200 dark:border-neutral-800 flex-shrink-0 z-10" />;
     }
 
-    // Only show workspace + project scores if we're on the Analysis screen
-    if (navigateTo !== Screen.Analysis) {
-        return (
-            <header className="bg-white dark:bg-neutral-900 h-[73px] px-6 border-b border-gray-200 dark:border-neutral-800 flex-shrink-0 z-10 flex items-center">
-                <h1 className="text-lg font-bold text-gray-800 dark:text-neutral-50 truncate">{currentWorkspace.name}</h1>
-            </header>
-        );
-    }
-
-    // If we ARE on Analysis screen → show the full row
     return (
-        <header className="bg-white dark:bg-neutral-900 px-6 border-b border-gray-200 dark:border-neutral-800 flex justify-between items-center flex-shrink-0 z-10 h-[73px]">
-            <div className="flex items-center space-x-6">
-                <div>
-                    <p className="text-sm text-gray-500 dark:text-neutral-500">Current Workspace</p>
-                    <h1 className="text-lg font-bold text-gray-800 dark:text-neutral-50">{currentWorkspace.name}</h1>
-                </div>
-                <div>
-                    <p className="text-sm text-gray-500 dark:text-neutral-500">Document Title</p>
-                    <h2 className="text-md font-semibold text-gray-700 dark:text-neutral-200">Example.docx</h2>
-                </div>
-                <div>
-                    <p className="text-sm text-gray-500 dark:text-neutral-500">Project Scores</p>
-                    <h2 className="text-md font-semibold text-gray-700 dark:text-neutral-200">92%</h2>
-                </div>
-                <button className="px-4 py-2 bg-red-700 text-white rounded-lg hover:bg-red-800 transition">Auto Enhance</button>
+        <header className="bg-white dark:bg-neutral-900 h-[73px] px-6 border-b border-gray-200 dark:border-neutral-800 flex items-center flex-shrink-0 z-10">
+            <div className="flex items-center gap-4">
+                <p className="text-sm text-gray-500 dark:text-neutral-500">Current Workspace</p>
+                <h1 className="text-lg font-bold text-gray-800 dark:text-neutral-50 truncate">{currentWorkspace.name}</h1>
             </div>
         </header>
     );
 };
-
-
-
 
 export const Layout: React.FC<LayoutProps> = (props) => {
     const { children } = props;
@@ -326,7 +304,7 @@ export const Layout: React.FC<LayoutProps> = (props) => {
         <div className="flex h-screen bg-gray-100 dark:bg-neutral-950 overflow-hidden">
             <WorkspaceSidebar {...props} isCollapsed={isSidebarCollapsed} onToggleCollapse={handleToggleCollapse} />
             <div className="flex-1 flex flex-col overflow-hidden">
-            <TopNavbar currentWorkspace={props.currentWorkspace} navigateTo={props.navigateTo} />
+            <TopNavbar currentWorkspace={props.currentWorkspace} />
                 <main className="flex-1 overflow-y-auto">
                     {children}
                 </main>
