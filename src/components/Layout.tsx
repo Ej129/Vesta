@@ -24,6 +24,13 @@ interface LayoutProps {
   onDeleteWorkspace: (workspace: Workspace) => void;
   invitations: WorkspaceInvitation[];
   onRespondToInvitation: (workspaceId: string, response: 'accept' | 'decline') => void;
+
+  /**
+   * Optional: when provided, Layout will use this to detect if the active screen
+   * is Analysis (so it can hide the global top bar). If you don't pass this,
+   * Layout will attempt a best-effort client-side detection from window.location.
+   */
+  currentScreen?: Screen;
 }
 
 const UserProfileDropdown: React.FC<{ navigateTo: NavigateTo; onLogout: () => void; onManageMembers: () => void }> = ({ navigateTo, onLogout, onManageMembers }) => (
@@ -272,10 +279,10 @@ const WorkspaceSidebar: React.FC<Pick<LayoutProps, 'currentUser' | 'onLogout' | 
     );
 };
 
-const TopNavbar: React.FC<Pick<LayoutProps, 'currentWorkspace'> & { currentScreen: Screen }> = 
-({ currentWorkspace, currentScreen }) => {
-    // Hide top bar entirely on AnalysisScreen
-    if (currentScreen === Screen.Analysis) {
+const TopNavbar: React.FC<Pick<LayoutProps, 'currentWorkspace'> & { isAnalysis: boolean }> = 
+({ currentWorkspace, isAnalysis }) => {
+    // If we are in the Analysis screen, do not render the global top bar.
+    if (isAnalysis) {
         return null;
     }
 
@@ -293,10 +300,33 @@ const TopNavbar: React.FC<Pick<LayoutProps, 'currentWorkspace'> & { currentScree
     );
 };
 
-
-export const Layout: React.FC<LayoutProps & { currentScreen: Screen }> = (props) => {
-    const { children, currentScreen } = props;
+export const Layout: React.FC<LayoutProps> = (props) => {
+    const { children } = props;
     const [isSidebarCollapsed, setSidebarCollapsed] = useState(localStorage.getItem('vesta-sidebar-collapsed') === 'true');
+
+    const [isAnalysis, setIsAnalysis] = useState(false);
+
+    // Detect analysis screen:
+    //  - prefer explicit prop `currentScreen` if passed,
+    //  - otherwise fallback to client pathname check (best-effort).
+    useEffect(() => {
+      let detected = false;
+      try {
+        if (props.currentScreen === Screen.Analysis) detected = true;
+      } catch (e) {
+        // ignore
+      }
+
+      if (!detected && typeof window !== 'undefined') {
+        const p = window.location.pathname || '';
+        // best-effort check for "analysis" in path - adjust if your route differs
+        if (p.toLowerCase().includes('/analysis') || p.toLowerCase().includes('analysis')) {
+          detected = true;
+        }
+      }
+
+      setIsAnalysis(detected);
+    }, [props.currentScreen]);
 
     const handleToggleCollapse = () => {
         const newState = !isSidebarCollapsed;
@@ -308,7 +338,7 @@ export const Layout: React.FC<LayoutProps & { currentScreen: Screen }> = (props)
         <div className="flex h-screen bg-gray-100 dark:bg-neutral-950 overflow-hidden">
             <WorkspaceSidebar {...props} isCollapsed={isSidebarCollapsed} onToggleCollapse={handleToggleCollapse} />
             <div className="flex-1 flex flex-col overflow-hidden">
-                <TopNavbar currentWorkspace={props.currentWorkspace} currentScreen={currentScreen} />
+            <TopNavbar currentWorkspace={props.currentWorkspace} isAnalysis={isAnalysis} />
                 <main className="flex-1 overflow-y-auto">
                     {children}
                 </main>
@@ -316,7 +346,6 @@ export const Layout: React.FC<LayoutProps & { currentScreen: Screen }> = (props)
         </div>
     );
 };
-
 
 export const CenteredLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-neutral-950 font-sans p-4">
