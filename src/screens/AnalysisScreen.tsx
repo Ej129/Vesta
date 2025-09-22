@@ -804,15 +804,15 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
         </div>
       )}
 
-      {/* Header: Workspace left, Editable Title + Metrics center, Auto-Enhance right */}
+      {/* Header: All groups in one aligned row (workspace + title, center metrics, right button) */}
       <header className="w-full bg-white border-b shadow-sm">
-        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
-          {/* Left: Workspace label */}
-          <div className="mr-6 min-w-0">
-            <p className="text-xs text-gray-500">
+        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between gap-8">
+          {/* Left: Workspace + Title inline */}
+          <div className="flex items-baseline gap-4 min-w-0">
+            <p className="text-sm text-gray-500 font-medium flex-shrink-0">
               {currentReport.workspaceId ? currentReport.workspaceId.replace("-", " ").toUpperCase() : "CURRENT WORKSPACE"}
             </p>
-            {/* Editable Title */}
+
             <input
               type="text"
               value={currentReport.title}
@@ -820,17 +820,16 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
               onBlur={() => saveReportTitle(currentReport.id, currentReport.title)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
-                  // blur to trigger save
                   (e.target as HTMLInputElement).blur();
                 }
               }}
-              className="text-xl font-bold text-gray-900 border-none focus:outline-none focus:ring-0 bg-transparent w-full truncate"
+              className="text-lg font-semibold text-gray-900 border-none focus:outline-none focus:ring-0 bg-transparent truncate min-w-0"
               aria-label="Edit document title"
             />
           </div>
 
-          {/* Center metrics (aligned to app matrix) */}
-          <div className="flex gap-8 items-center justify-center">
+          {/* Center: Project Scores */}
+          <div className="flex flex-1 justify-center gap-10">
             <div className="text-center">
               <p className="text-sm text-gray-600">Project Score</p>
               <p className="font-bold text-green-600">{currentReport.scores?.project ?? 100}%</p>
@@ -849,8 +848,8 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
             </div>
           </div>
 
-          {/* Right */}
-          <div className="ml-6">
+          {/* Right: Auto-Enhance */}
+          <div className="flex-shrink-0">
             <button
               onClick={handleAutoEnhance}
               disabled={isEnhancing}
