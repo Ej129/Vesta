@@ -803,71 +803,61 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
         </div>
       )}
 
-      {/* Header (two rows) */}
-      <header className="w-full bg-white border-b shadow-sm">
-        <div className="max-w-7xl mx-auto px-6 py-3 space-y-3">
-          {/* Top row: Workspace label (left), Scores (center), Auto-Enhance (right) */}
-          <div className="flex items-center justify-between">
-            {/* Left */}
-            <div className="flex items-center gap-3 min-w-[200px]">
-              <p className="text-sm text-gray-500 font-medium">CURRENT WORKSPACE</p>
-              <p className="text-sm text-gray-700 font-semibold truncate">{currentWorkspace?.name ?? (currentReport.workspaceId ? currentReport.workspaceId.replace("-", " ").toUpperCase() : "")}</p>
-            </div>
+{/* Header: Workspace left, Metrics center, Auto-Enhance right */}
+<header className="w-full bg-white border-b shadow-sm">
+  <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+    
+    {/* Left: Current Workspace Title */}
+    <div className="flex items-center gap-4">
+      <h1 className="text-lg font-bold text-gray-900">
+        {currentReport.workspaceId
+          ? currentReport.workspaceId.replace("-", " ").toUpperCase()
+          : "CURRENT WORKSPACE"}
+      </h1>
+    </div>
 
-            {/* Center - Scores */}
-            <div className="flex items-center gap-10 justify-center flex-1 max-w-3xl">
-              <div className="text-center">
-                <p className="text-sm text-gray-600">Project Score</p>
-                <p className="font-bold text-green-600">{currentReport.scores?.project ?? 100}%</p>
-              </div>
-              <div className="text-center">
-                <p className="text-sm text-gray-600">Strategic Goals</p>
-                <p className="font-bold text-green-600">{currentReport.scores?.strategicGoals ?? 100}%</p>
-              </div>
-              <div className="text-center">
-                <p className="text-sm text-gray-600">Regulations</p>
-                <p className="font-bold text-green-600">{currentReport.scores?.regulations ?? 100}%</p>
-              </div>
-              <div className="text-center">
-                <p className="text-sm text-gray-600">Risk Mitigation</p>
-                <p className="font-bold text-green-600">{currentReport.scores?.risk ?? 100}%</p>
-              </div>
-            </div>
+    {/* Center: Metrics */}
+    <div className="flex gap-8 items-center">
+      <div className="text-center">
+        <p className="text-sm text-gray-600">Project Score</p>
+        <p className="font-bold text-green-600">
+          {currentReport.scores?.project ?? 100}%
+        </p>
+      </div>
+      <div className="text-center">
+        <p className="text-sm text-gray-600">Strategic Goals</p>
+        <p className="font-bold text-green-600">
+          {currentReport.scores?.strategicGoals ?? 100}%
+        </p>
+      </div>
+      <div className="text-center">
+        <p className="text-sm text-gray-600">Regulations</p>
+        <p className="font-bold text-green-600">
+          {currentReport.scores?.regulations ?? 100}%
+        </p>
+      </div>
+      <div className="text-center">
+        <p className="text-sm text-gray-600">Risk Mitigation</p>
+        <p className="font-bold text-green-600">
+          {currentReport.scores?.risk ?? 100}%
+        </p>
+      </div>
+    </div>
 
-            {/* Right */}
-            <div className="flex-shrink-0">
-              <button
-                onClick={handleAutoEnhance}
-                disabled={isEnhancing}
-                className="px-5 py-2 rounded-lg bg-red-600 text-white font-bold shadow hover:bg-red-700 disabled:opacity-60"
-                aria-label="Auto Enhance"
-              >
-                Auto-Enhance
-              </button>
-            </div>
-          </div>
+    {/* Right: Auto-Enhance Button */}
+    <div>
+      <button
+        onClick={handleAutoEnhance}
+        disabled={isEnhancing}
+        className="px-5 py-2 rounded-lg bg-red-600 text-white font-bold shadow hover:bg-red-700 disabled:opacity-60"
+        aria-label="Auto Enhance"
+      >
+        Auto-Enhance
+      </button>
+    </div>
 
-          {/* Second row: Workspace ID / Title (left) and download/edit (right) */}
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4 min-w-0">
-              <BackButton onBack={handleBack} />
-              <p className="text-xs text-gray-500">{currentReport.workspaceId ?? ""}</p>
-              <h2 className="text-xl font-bold text-gray-900 truncate">{currentReport.title}</h2>
-            </div>
-
-            <div className="flex items-center gap-3">
-              <DownloadDropdown onDownloadPdf={handleDownloadPdf} onDownloadTxt={handleDownloadTxt} onDownloadDocx={handleDownloadDocx} />
-              {isEditing ? (
-                <button onClick={handleSaveChanges} className="px-4 py-2 rounded-lg bg-red-600 text-white font-semibold">Save Draft</button>
-              ) : (
-                <button onClick={() => setIsEditing((s) => !s)} className="px-4 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-800 font-semibold flex items-center gap-2">
-                  <EditIcon className="w-4 h-4" /> Edit
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      </header>
+  </div>
+</header>
 
       {/* Main content grid: Document (left; span2), Findings + Chat (right) */}
       <main className="max-w-7xl mx-auto p-6 grid grid-cols-1 xl:grid-cols-3 gap-6">
