@@ -2,6 +2,9 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import jsPDF from "jspdf";
+import { Document as DocxDocument, Packer, Paragraph, TextRun } from "docx";
+
 import {
   AnalysisReport,
   Finding,
@@ -11,8 +14,13 @@ import {
   ChatMessage,
   Screen,
 } from "../types";
+
+import * as workspaceApi from "../api/workspace";
+import * as vestaApi from "../api/vesta";
+import FeedbackModal from "../components/FeedbackModal";
+import { AnimatedChecklist } from "../components/AnimatedChecklist";
+
 import {
-  StarIcon,
   DownloadIcon,
   EditIcon,
   CheckCircleIcon,
@@ -25,22 +33,16 @@ import {
   ChevronUpIcon,
   SparklesIcon,
 } from "../components/Icons";
-import jsPDF from "jspdf";
-import { Document as DocxDocument, Packer, Paragraph, TextRun } from "docx";
-import * as workspaceApi from "../api/workspace";
-import * as vestaApi from "../api/vesta";
-import FeedbackModal from "../components/FeedbackModal";
-import { AnimatedChecklist } from "../components/AnimatedChecklist";
 
 /* --------------------------------------------------------------------------
   NOTES:
-  - This file keeps your previous behaviours but reorganizes for safety
-  - Make sure 'docx' and 'jspdf' are installed in your project
-  - Ensure your backend sanitizes diffContent; this file applies a client-side
-    conservative sanitizer to reduce XSS risk when using dangerouslySetInnerHTML
+  - Replace the existing file with this one.
+  - Ensure `docx` and `jspdf` are installed: npm i docx jspdf
+  - This component keeps prior app logic but modifies the header layout and
+    places Actionable Findings on the right as collapsible cards.
   -------------------------------------------------------------------------- */
 
-/* ----------------------------- Utilities ------------------------------ */
+/* -------------------- Utilities & Sanitizer -------------------- */
 
 const escapeHtml = (unsafe: string) =>
   unsafe
@@ -53,15 +55,11 @@ const escapeHtml = (unsafe: string) =>
 const escapeRegExp = (text: string) =>
   text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-// A conservative client-side sanitizer: only allow a small set of tags used by your diff (ins, del, mark, br)
+// Conservative whitelist sanitizer for minimal HTML used by diffs
 function sanitizeHtmlAllowlist(html: string) {
-  // Remove any <script> or <style> content outright
   let sanitized = html.replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, "");
   sanitized = sanitized.replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, "");
 
-  // Allow only certain tags and their attributes (very conservative)
-  // We'll strip attributes except for 'class' on allowed tags
-  // Allowed tags: br, mark, del, ins, strong, b, i, em, p, ul, ol, li, span
   const allowed = [
     "br",
     "mark",
@@ -76,14 +74,12 @@ function sanitizeHtmlAllowlist(html: string) {
     "ol",
     "li",
     "span",
+    "div",
   ];
 
-  // Remove any tag that's not allowed
   sanitized = sanitized.replace(/<\/?([a-zA-Z0-9-]+)(\s[^>]*)?>/g, (match, tag, attrs) => {
     if (!allowed.includes(tag.toLowerCase())) return "";
-    // Keep tag but strip attributes except class
     if (!attrs) return `<${tag}>`;
-    // extract class attr only
     const classMatch = attrs.match(/class\s*=\s*"(.*?)"/i);
     if (classMatch) return `<${tag} class="${classMatch[1]}">`;
     return `<${tag}>`;
@@ -92,63 +88,49 @@ function sanitizeHtmlAllowlist(html: string) {
   return sanitized;
 }
 
-/* Inject snippet ids: find first occurrence of each finding.sourceSnippet in the escaped content
-   and wrap with span id="snippet-<id>" so we can scroll-to-highlight.
-   This works on plain text and on sanitized HTML (attempts simple replace).
-*/
+// inject snippet ids for finding.sourceSnippet into HTML (first occurrence only)
 function injectSnippetIdsIntoHtml(html: string, findings: Finding[] = []) {
   let out = html;
   for (const f of findings) {
     if (!f || !f.sourceSnippet) continue;
     const snippet = f.sourceSnippet.trim();
     if (!snippet) continue;
-
     try {
       const escapedSnippet = escapeHtml(snippet);
       const re = new RegExp(escapeRegExp(escapedSnippet), "i");
-      // Only replace first occurrence to avoid multiple id collisions
       if (re.test(out)) {
         out = out.replace(re, `<span id="snippet-${f.id}" class="snippet-target">${escapedSnippet}</span>`);
       } else {
-        // If HTML version doesn't contain the escaped snippet (rare), try plain snippet (unescaped)
         const rePlain = new RegExp(escapeRegExp(snippet), "i");
         if (rePlain.test(out)) {
           out = out.replace(rePlain, `<span id="snippet-${f.id}" class="snippet-target">${snippet}</span>`);
         }
       }
     } catch (err) {
-      // a replace failure shouldn't break the whole rendering
-      console.warn("injectSnippetIdsIntoHtml error for finding:", f.id, err);
+      console.warn("injectSnippetIdsIntoHtml error:", f.id, err);
     }
   }
   return out;
 }
 
-/* Small helper to convert diff-style text to plain content (for downloads).
-   Keeps only '++ ' lines (additions) or original depending on preference.
-*/
 function diffToPlainText(diff?: string | null) {
   if (!diff) return "";
-  // If diff contains HTML tags, strip tags and return textContent-like using a simple approach
   if (/<\w+[^>]*>/.test(diff)) {
-    // naive strip tags
     return diff.replace(/<\/?[^>]+(>|$)/g, "");
   }
-  // Otherwise, treat as line diff
   return diff
     .split("\n")
     .map((line) => {
       if (line.startsWith("++ ")) return line.substring(3);
-      if (line.startsWith("-- ")) return ""; // removed
+      if (line.startsWith("-- ")) return "";
       return line;
     })
     .filter((l) => l.trim() !== "")
     .join("\n");
 }
 
-/* --------------------------- Small UI bits --------------------------- */
+/* ----------------------------- Small UI Bits ----------------------------- */
 
-// Arrow Left Icon Component (kept simple)
 const ArrowLeftIcon: React.FC<{ className?: string }> = ({ className }) => (
   <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden>
     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -167,7 +149,8 @@ const BackButton: React.FC<{ onBack: () => void; title?: string }> = ({ onBack, 
   </button>
 );
 
-/* ------------------------- Enhance Controls ------------------------- */
+/* --------------------------- Enhance Controls --------------------------- */
+
 const EnhanceControls: React.FC<{
   activeReport: AnalysisReport;
   onAutoEnhance?: (report?: AnalysisReport) => Promise<void> | void;
@@ -183,7 +166,6 @@ const EnhanceControls: React.FC<{
       await onAutoEnhance(activeReport);
     } catch (err) {
       console.error("AutoEnhance error:", err);
-      // optionally show user-level feedback
     }
   };
 
@@ -209,7 +191,8 @@ const EnhanceControls: React.FC<{
   );
 };
 
-/* ------------------------- Download Dropdown ------------------------ */
+/* -------------------------- Download Dropdown -------------------------- */
+
 const DownloadDropdown: React.FC<{
   onDownloadPdf: () => void;
   onDownloadTxt: () => void;
@@ -276,6 +259,7 @@ const DownloadDropdown: React.FC<{
 };
 
 /* ------------------------- Document Editor ------------------------- */
+
 const DocumentEditor: React.FC<{
   report: AnalysisReport;
   isEditing: boolean;
@@ -301,11 +285,9 @@ const DocumentEditor: React.FC<{
 }) => {
   const [showComparison, setShowComparison] = useState(true);
 
-  // returns sanitized + injected HTML for display
   const getOriginalHtml = useMemo(() => {
     const raw = report?.documentContent ?? "";
     const escaped = escapeHtml(raw).replace(/\n/g, "<br />");
-    // No HTML tags originally, so we can inject snippet ids safely
     return injectSnippetIdsIntoHtml(escaped, report?.findings ?? []);
   }, [report]);
 
@@ -314,12 +296,10 @@ const DocumentEditor: React.FC<{
       return getOriginalHtml;
     }
     const diff = report.diffContent;
-    // If diff contains HTML (ins/del/mark), sanitize and inject snippet ids
     if (/<\w+[^>]*>/.test(diff)) {
       const sanitized = sanitizeHtmlAllowlist(diff);
       return injectSnippetIdsIntoHtml(sanitized, report?.findings ?? []);
     }
-    // Otherwise, build html with simple marks
     const html = diff
       .split("\n")
       .map((line) => {
@@ -331,18 +311,15 @@ const DocumentEditor: React.FC<{
     return injectSnippetIdsIntoHtml(html, report?.findings ?? []);
   }, [report, getOriginalHtml]);
 
-  // When rendering, we want to add a flash/highlight CSS for hovered / selected snippet.
-  // We'll render an inline <style> once to ensure the class exists.
   const markFlashStyle = (
     <style key="analysis-screen-styles" dangerouslySetInnerHTML={{
       __html: `
         .mark-flash { animation: markFlash 1.2s ease; }
         @keyframes markFlash {
-          0% { box-shadow: 0 0 0 4px rgba(255,215,0,0.15); }
+          0% { box-shadow: 0 0 0 6px rgba(255,215,0,0.12); }
           100% { box-shadow: none; }
         }
         .snippet-target { padding: 0 2px; border-radius: 2px; }
-        .snippet-hover { background: rgba(59,130,246,0.08); }
       `
     }} />
   );
@@ -350,8 +327,6 @@ const DocumentEditor: React.FC<{
   return (
     <div className="bg-white rounded-xl shadow-lg border border-gray-200 flex flex-col min-h-[60vh]">
       {markFlashStyle}
-
-      {/* Header */}
       <div className="p-4 flex items-start justify-between border-b">
         <div className="pr-4 min-w-0">
           <p className="text-xs text-gray-500">
@@ -371,34 +346,20 @@ const DocumentEditor: React.FC<{
             </button>
           ) : null}
 
-          <DownloadDropdown
-            onDownloadPdf={onDownloadPdf}
-            onDownloadTxt={onDownloadTxt}
-            onDownloadDocx={onDownloadDocx}
-          />
+          <DownloadDropdown onDownloadPdf={onDownloadPdf} onDownloadTxt={onDownloadTxt} onDownloadDocx={onDownloadDocx} />
 
           {isEditing ? (
-            <button
-              onClick={onSaveChanges}
-              className="px-4 py-1.5 bg-red-600 text-white rounded-lg font-bold"
-              aria-label="Save Draft"
-            >
+            <button onClick={onSaveChanges} className="px-4 py-1.5 bg-red-600 text-white rounded-lg font-bold" aria-label="Save Draft">
               Save Draft
             </button>
           ) : (
-            <button
-              onClick={onToggleEdit}
-              className="p-2 rounded-lg hover:bg-gray-100"
-              title="Edit Document"
-              aria-label="Edit Document"
-            >
+            <button onClick={onToggleEdit} className="p-2 rounded-lg hover:bg-gray-100" title="Edit Document" aria-label="Edit Document">
               <EditIcon className="w-5 h-5" />
             </button>
           )}
         </div>
       </div>
 
-      {/* Body */}
       <div className="p-6 flex-1 overflow-auto">
         {isEditing ? (
           <textarea
@@ -412,36 +373,24 @@ const DocumentEditor: React.FC<{
           <div className="grid md:grid-cols-2 gap-6">
             <div className="prose max-w-none">
               <h3 className="text-sm font-semibold text-gray-500 mb-2">Original</h3>
-              <div
-                id="original-content"
-                className="whitespace-pre-wrap"
-                dangerouslySetInnerHTML={{ __html: getOriginalHtml }}
-              />
+              <div id="original-content" className="whitespace-pre-wrap" dangerouslySetInnerHTML={{ __html: getOriginalHtml }} />
             </div>
 
             <div className="prose max-w-none">
               <h3 className="text-sm font-semibold text-gray-500 mb-2">Enhanced</h3>
-              <div
-                id="enhanced-content"
-                className="whitespace-pre-wrap"
-                dangerouslySetInnerHTML={{ __html: getEnhancedHtml }}
-              />
+              <div id="enhanced-content" className="whitespace-pre-wrap" dangerouslySetInnerHTML={{ __html: getEnhancedHtml }} />
             </div>
           </div>
         ) : (
-          <div
-            className="prose max-w-none"
-            dangerouslySetInnerHTML={{
-              __html: report.diffContent ? getEnhancedHtml : getOriginalHtml,
-            }}
-          />
+          <div className="prose max-w-none" dangerouslySetInnerHTML={{ __html: report.diffContent ? getEnhancedHtml : getOriginalHtml }} />
         )}
       </div>
     </div>
   );
 };
 
-/* ----------------------------- Score Card --------------------------- */
+/* ----------------------------- Score Card ---------------------------- */
+
 const ScoreCard: React.FC<{ label: string; score: number }> = ({ label, score }) => {
   const getScoreColor = (s: number) => {
     if (s >= 90) return "text-green-600";
@@ -457,7 +406,8 @@ const ScoreCard: React.FC<{ label: string; score: number }> = ({ label, score })
   );
 };
 
-/* ---------------------- Actionable Findings (collapsible) ---------------------- */
+/* ------------------------- Actionable Findings ------------------------ */
+
 const ActionableFindings: React.FC<{
   findings: Finding[];
   onDismiss: (f: Finding) => void;
@@ -467,9 +417,7 @@ const ActionableFindings: React.FC<{
 }> = ({ findings, onDismiss, onResolve, onHover, onClick }) => {
   const [openId, setOpenId] = useState<string | null>(null);
 
-  const toggle = (id: string) => {
-    setOpenId((prev) => (prev === id ? null : id));
-  };
+  const toggle = (id: string) => setOpenId((prev) => (prev === id ? null : id));
 
   return (
     <div className="space-y-3">
@@ -497,10 +445,7 @@ const ActionableFindings: React.FC<{
               <span className="ml-4">{isOpen ? <ChevronUpIcon className="w-4 h-4" /> : <ChevronDownIcon className="w-4 h-4" />}</span>
             </button>
 
-            <div
-              className={`transition-all duration-300 overflow-hidden ${isOpen ? "max-h-[800px]" : "max-h-0"}`}
-              aria-hidden={!isOpen}
-            >
+            <div className={`transition-all duration-300 overflow-hidden ${isOpen ? "max-h-[800px]" : "max-h-0"}`} aria-hidden={!isOpen}>
               <div className="p-4 bg-gray-50 text-sm text-gray-700">
                 <p className="mb-2"><strong>Issue:</strong> {f.title}</p>
                 {f.regulation && <p className="text-xs text-gray-600 mb-2"><strong>Regulation:</strong> {f.regulation}</p>}
@@ -537,7 +482,8 @@ const ActionableFindings: React.FC<{
   );
 };
 
-/* --------------------------- Chat Panel ---------------------------- */
+/* ----------------------------- Chat Panel ---------------------------- */
+
 const ChatPanel: React.FC<{ documentContent: string }> = ({ documentContent }) => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -551,17 +497,14 @@ const ChatPanel: React.FC<{ documentContent: string }> = ({ documentContent }) =
   const handleSend = async (e?: React.FormEvent) => {
     e?.preventDefault();
     if (!input.trim() || isLoading) return;
-
     const currentInput = input;
     const userMessage: ChatMessage = { role: "user", content: currentInput };
 
-    // Append user message locally immediately
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
     setIsLoading(true);
 
     try {
-      // Pass the history including this user message to the API
       const historyForApi = [...messages, userMessage];
       const response = await vestaApi.getChatResponse(documentContent, historyForApi, currentInput);
       setMessages((prev) => [...prev, { role: "model", content: response }]);
@@ -627,7 +570,7 @@ const ChatPanel: React.FC<{ documentContent: string }> = ({ documentContent }) =
   );
 };
 
-/* -------------------------- Main AnalysisScreen -------------------------- */
+/* --------------------------- Main AnalysisScreen --------------------------- */
 
 interface AnalysisScreenProps extends ScreenLayoutProps {
   activeReport: AnalysisReport | null;
@@ -656,26 +599,21 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
   navigateTo,
   onBack,
 }) => {
-  // Local editable copy of the active report. Keep it synced when activeReport changes.
   const [currentReport, setCurrentReport] = useState<AnalysisReport | null>(activeReport);
   const [isEditing, setIsEditing] = useState(false);
   const [feedbackFinding, setFeedbackFinding] = useState<Finding | null>(null);
   const [hoveredFindingId, setHoveredFindingId] = useState<string | null>(null);
   const [selectedFindingId, setSelectedFindingId] = useState<string | null>(null);
 
-  // Sync activeReport -> currentReport whenever activeReport changes.
   useEffect(() => {
     setCurrentReport(activeReport);
   }, [activeReport]);
 
-  // Back handler fallback
   const handleBack = () => {
     if (onBack) return onBack();
     if (navigateTo) return navigateTo(Screen.Dashboard);
-    // fallback no-op
   };
 
-  // Auto-Enhance click
   const handleAutoEnhance = async () => {
     if (!currentReport || isEnhancing) return;
     try {
@@ -685,13 +623,9 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
     }
   };
 
-  // Update finding status locally and inform parent
   const handleFindingStatusChange = (findingId: string, status: FindingStatus) => {
     if (!currentReport) return;
-    const updated = {
-      ...currentReport,
-      findings: currentReport.findings.map((f) => (f.id === findingId ? { ...f, status } : f)),
-    };
+    const updated = { ...currentReport, findings: currentReport.findings.map((f) => (f.id === findingId ? { ...f, status } : f)) };
     setCurrentReport(updated);
     try {
       onUpdateReport(updated);
@@ -700,14 +634,10 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
     }
   };
 
-  // Dismiss (open feedback modal flow)
   const handleDismissSubmit = async (reason: FeedbackReason) => {
     if (!feedbackFinding || !currentReport || !currentWorkspace) return;
     try {
-      await workspaceApi.addDismissalRule(currentWorkspace.id, {
-        findingTitle: feedbackFinding.title,
-        reason,
-      });
+      await workspaceApi.addDismissalRule(currentWorkspace.id, { findingTitle: feedbackFinding.title, reason });
       handleFindingStatusChange(feedbackFinding.id, "dismissed");
       setFeedbackFinding(null);
     } catch (err) {
@@ -715,7 +645,6 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
     }
   };
 
-  // Finding click -> scroll to snippet in document
   const handleFindingClick = (findingId: string) => {
     setSelectedFindingId(findingId);
     const el = document.getElementById(`snippet-${findingId}`);
@@ -726,12 +655,9 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
     }
   };
 
-  // Downloads: use enhanced content when available, otherwise original
   const getContentForDownload = (report: AnalysisReport) => {
     if (!report) return "";
-    if (report.diffContent && report.diffContent.length > 0) {
-      return diffToPlainText(report.diffContent);
-    }
+    if (report.diffContent && report.diffContent.length > 0) return diffToPlainText(report.diffContent);
     return report.documentContent ?? "";
   };
 
@@ -819,7 +745,6 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
     }
   };
 
-  // Save changes made in editor back to parent
   const handleSaveChanges = () => {
     setIsEditing(false);
     if (!currentReport) return;
@@ -839,17 +764,17 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
     );
   }
 
-  // activeFindings: only 'active' status ones for the actionable panel
+  // Only show active findings in actionable panel
   const activeFindings = currentReport.findings?.filter((f) => f.status === "active") ?? [];
 
   return (
     <div className="relative h-full bg-gray-50 min-h-screen">
-      {/* Back button (top-left) */}
+      {/* Back button */}
       <div className="absolute top-4 left-4 z-20">
         <BackButton onBack={handleBack} />
       </div>
 
-      {/* Overlay loader when enhancing/analyzing */}
+      {/* Overlay loader when enhancing */}
       {isEnhancing && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-white/80 backdrop-blur-sm">
           <div className="bg-white rounded-2xl p-6 shadow border">
@@ -860,40 +785,36 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
         </div>
       )}
 
-      {/* Top header bar: workspace left, metrics center, auto-enhance right */}
+      {/* Header: Workspace left, Metrics center, Auto-Enhance right */}
       <header className="w-full bg-white border-b shadow-sm">
         <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
-          {/* Left: Workspace & Project info */}
+          {/* Left */}
           <div>
-            <p className="text-xs text-gray-500">
-              {currentReport.workspaceId ? currentReport.workspaceId.replace("-", " ").toUpperCase() : "WORKSPACE"}
-            </p>
+            <p className="text-xs text-gray-500">{currentReport.workspaceId ? currentReport.workspaceId.replace("-", " ").toUpperCase() : "CURRENT WORKSPACE"}</p>
             <h1 className="text-xl font-bold text-gray-900">{currentReport.title}</h1>
           </div>
 
-          {/* Center: Metrics row */}
+          {/* Center metrics (aligned to app matrix) */}
           <div className="flex gap-8 items-center">
-            <div className="flex gap-4">
-              <div className="text-center">
-                <p className="text-sm text-gray-600">Project Score</p>
-                <p className="font-bold text-green-600">100%</p>
-              </div>
-              <div className="text-center">
-                <p className="text-sm text-gray-600">Strategic Goals</p>
-                <p className="font-bold text-green-600">100%</p>
-              </div>
-              <div className="text-center">
-                <p className="text-sm text-gray-600">Regulations</p>
-                <p className="font-bold text-green-600">100%</p>
-              </div>
-              <div className="text-center">
-                <p className="text-sm text-gray-600">Risk Mitigation</p>
-                <p className="font-bold text-green-600">100%</p>
-              </div>
+            <div className="text-center">
+              <p className="text-sm text-gray-600">Project Score</p>
+              <p className="font-bold text-green-600">{currentReport.scores?.project ?? 100}%</p>
+            </div>
+            <div className="text-center">
+              <p className="text-sm text-gray-600">Strategic Goals</p>
+              <p className="font-bold text-green-600">{currentReport.scores?.strategicGoals ?? 100}%</p>
+            </div>
+            <div className="text-center">
+              <p className="text-sm text-gray-600">Regulations</p>
+              <p className="font-bold text-green-600">{currentReport.scores?.regulations ?? 100}%</p>
+            </div>
+            <div className="text-center">
+              <p className="text-sm text-gray-600">Risk Mitigation</p>
+              <p className="font-bold text-green-600">{currentReport.scores?.risk ?? 100}%</p>
             </div>
           </div>
 
-          {/* Right: Auto-Enhance */}
+          {/* Right */}
           <div>
             <button
               onClick={handleAutoEnhance}
@@ -907,7 +828,7 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
         </div>
       </header>
 
-      {/* Main grid: document centered (two-column layout) */}
+      {/* Main content grid: Document(left; span2), Actionable Findings + Chat (right) */}
       <main className="max-w-7xl mx-auto p-6 grid grid-cols-1 xl:grid-cols-3 gap-6">
         {/* Document area (span 2) */}
         <section className="xl:col-span-2">
@@ -925,37 +846,9 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
           />
         </section>
 
-        {/* Right column: actionable findings + analysis/scores + chat */}
+        {/* Right column */}
         <aside className="xl:col-span-1 space-y-6">
-          {/* Top: Analysis controls and scores */}
-          <div className="bg-white rounded-xl shadow p-4 border">
-            <div className="flex items-center justify-between">
-              <h3 className="font-bold">Analysis Panel</h3>
-            </div>
-
-            <div className="mt-4">
-              <EnhanceControls activeReport={currentReport} onAutoEnhance={onAutoEnhance} isEnhancing={isEnhancing} isAnalyzing={!!analysisStatusText} />
-            </div>
-
-            <div className="mt-6">
-              <h4 className="text-sm font-semibold text-gray-500 mb-3">Compliance Scores</h4>
-              {currentReport.scores ? (
-                <div className="grid grid-cols-2 gap-3">
-                  <ScoreCard label="Project Score" score={currentReport.scores.project} />
-                  <ScoreCard label="Strategic Goals" score={currentReport.scores.strategicGoals} />
-                  <ScoreCard label="Regulations" score={currentReport.scores.regulations} />
-                  <ScoreCard label="Risk Mitigation" score={currentReport.scores.risk} />
-                </div>
-              ) : (
-                <div className="bg-gray-50 p-3 rounded text-center">
-                  <p className="text-2xl font-bold text-red-700">{currentReport.resilienceScore ?? 0}%</p>
-                  <p className="text-sm text-gray-600">Overall Score</p>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Actionable Findings box */}
+          {/* Actionable Findings */}
           <div className="bg-white rounded-xl shadow p-4 border">
             <h4 className="font-bold">Actionable Findings ({activeFindings.length})</h4>
             <div className="mt-3">
@@ -977,14 +870,14 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
             </div>
           </div>
 
-          {/* Chat panel */}
+          {/* Chat Panel */}
           <div className="h-[420px]">
             <ChatPanel documentContent={currentReport.documentContent ?? ""} />
           </div>
         </aside>
       </main>
 
-      {/* Feedback Modal for dismiss flow */}
+      {/* Feedback modal if dismissing */}
       {feedbackFinding && (
         <FeedbackModal finding={feedbackFinding} onClose={() => setFeedbackFinding(null)} onSubmit={handleDismissSubmit} />
       )}
