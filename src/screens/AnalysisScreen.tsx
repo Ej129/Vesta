@@ -804,63 +804,71 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
         </div>
       )}
 
-      {/* Header: All groups in one aligned row (workspace + title, center metrics, right button) */}
-      <header className="w-full bg-white border-b shadow-sm">
-        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between gap-8">
-          {/* Left: Workspace + Title inline */}
-          <div className="flex items-baseline gap-4 min-w-0">
-            <p className="text-sm text-gray-500 font-medium flex-shrink-0">
-              {currentReport.workspaceId ? currentReport.workspaceId.replace("-", " ").toUpperCase() : "CURRENT WORKSPACE"}
+          {/* Header: Workspace, Title, Scores, Auto-Enhance in one row */}
+    <header className="w-full bg-white border-b shadow-sm">
+      <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between gap-10">
+        
+        {/* Workspace + Title inline */}
+        <div className="flex items-center gap-4 min-w-[300px]">
+          <p className="text-sm font-medium text-gray-500">
+            {currentReport.workspaceId
+              ? currentReport.workspaceId.replace("-", " ").toUpperCase()
+              : "CURRENT WORKSPACE"}
+          </p>
+          <input
+            type="text"
+            value={currentReport.title}
+            onChange={(e) =>
+              setCurrentReport({ ...currentReport, title: e.target.value })
+            }
+            onBlur={() => saveReportTitle(currentReport.id, currentReport.title)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") e.currentTarget.blur();
+            }}
+            className="text-lg font-bold text-gray-900 border-none focus:outline-none focus:ring-0 bg-transparent"
+          />
+        </div>
+
+        {/* Scores in the middle */}
+        <div className="flex flex-1 justify-center gap-12">
+          <div className="text-center">
+            <p className="text-sm text-gray-600">Project Score</p>
+            <p className="font-bold text-green-600">
+              {currentReport.scores?.project ?? 100}%
             </p>
-
-            <input
-              type="text"
-              value={currentReport.title}
-              onChange={(e) => setCurrentReport({ ...currentReport, title: e.target.value })}
-              onBlur={() => saveReportTitle(currentReport.id, currentReport.title)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  (e.target as HTMLInputElement).blur();
-                }
-              }}
-              className="text-lg font-semibold text-gray-900 border-none focus:outline-none focus:ring-0 bg-transparent truncate min-w-0"
-              aria-label="Edit document title"
-            />
           </div>
-
-          {/* Center: Project Scores */}
-          <div className="flex flex-1 justify-center gap-10">
-            <div className="text-center">
-              <p className="text-sm text-gray-600">Project Score</p>
-              <p className="font-bold text-green-600">{currentReport.scores?.project ?? 100}%</p>
-            </div>
-            <div className="text-center">
-              <p className="text-sm text-gray-600">Strategic Goals</p>
-              <p className="font-bold text-green-600">{currentReport.scores?.strategicGoals ?? 100}%</p>
-            </div>
-            <div className="text-center">
-              <p className="text-sm text-gray-600">Regulations</p>
-              <p className="font-bold text-green-600">{currentReport.scores?.regulations ?? 100}%</p>
-            </div>
-            <div className="text-center">
-              <p className="text-sm text-gray-600">Risk Mitigation</p>
-              <p className="font-bold text-green-600">{currentReport.scores?.risk ?? 100}%</p>
-            </div>
+          <div className="text-center">
+            <p className="text-sm text-gray-600">Strategic Goals</p>
+            <p className="font-bold text-green-600">
+              {currentReport.scores?.strategicGoals ?? 100}%
+            </p>
           </div>
-
-          {/* Right: Auto-Enhance */}
-          <div className="flex-shrink-0">
-            <button
-              onClick={handleAutoEnhance}
-              disabled={isEnhancing}
-              className="px-5 py-2 rounded-lg bg-red-600 text-white font-bold shadow hover:bg-red-700 disabled:opacity-60"
-              aria-label="Auto Enhance"
-            >
-              Auto-Enhance
-            </button>
+          <div className="text-center">
+            <p className="text-sm text-gray-600">Regulations</p>
+            <p className="font-bold text-green-600">
+              {currentReport.scores?.regulations ?? 100}%
+            </p>
+          </div>
+          <div className="text-center">
+            <p className="text-sm text-gray-600">Risk Mitigation</p>
+            <p className="font-bold text-green-600">
+              {currentReport.scores?.risk ?? 100}%
+            </p>
           </div>
         </div>
-      </header>
+
+        {/* Auto-Enhance button */}
+        <div>
+          <button
+            onClick={handleAutoEnhance}
+            disabled={isEnhancing}
+            className="px-5 py-2 rounded-lg bg-red-600 text-white font-bold shadow hover:bg-red-700 disabled:opacity-60"
+          >
+            Auto-Enhance
+          </button>
+        </div>
+      </div>
+    </header>
 
       {/* Main content grid: Document(left; span2), Actionable Findings + Chat (right) */}
       <main className="max-w-7xl mx-auto p-6 grid grid-cols-1 xl:grid-cols-3 gap-6">
