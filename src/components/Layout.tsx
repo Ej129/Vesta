@@ -272,49 +272,43 @@ const WorkspaceSidebar: React.FC<Pick<LayoutProps, 'currentUser' | 'onLogout' | 
     );
 };
 
-const TopNavbar: React.FC<Pick<LayoutProps, 'currentWorkspace'>> = 
-({ currentWorkspace }) => {
+const TopNavbar: React.FC<Pick<LayoutProps, 'currentWorkspace' | 'navigateTo'>> = 
+({ currentWorkspace, navigateTo }) => {
     if (!currentWorkspace) {
         return <header className="bg-white dark:bg-neutral-900 h-[73px] px-6 border-b border-gray-200 dark:border-neutral-800 flex-shrink-0 z-10" />;
     }
 
+    // Only show workspace + project scores if we're on the Analysis screen
+    if (navigateTo !== Screen.Analysis) {
+        return (
+            <header className="bg-white dark:bg-neutral-900 h-[73px] px-6 border-b border-gray-200 dark:border-neutral-800 flex-shrink-0 z-10 flex items-center">
+                <h1 className="text-lg font-bold text-gray-800 dark:text-neutral-50 truncate">{currentWorkspace.name}</h1>
+            </header>
+        );
+    }
+
+    // If we ARE on Analysis screen → show the full row
     return (
-        <header className="bg-white dark:bg-neutral-900 px-6 border-b border-gray-200 dark:border-neutral-800 flex items-center justify-between flex-shrink-0 z-10 h-[73px]">
-            {/* Left: Workspace name */}
-            <div className="flex items-center gap-3">
-                <span className="text-sm text-gray-500 dark:text-neutral-500">Current Workspace:</span>
-                <h1 className="text-lg font-bold text-gray-800 dark:text-neutral-50">{currentWorkspace.name}</h1>
+        <header className="bg-white dark:bg-neutral-900 px-6 border-b border-gray-200 dark:border-neutral-800 flex justify-between items-center flex-shrink-0 z-10 h-[73px]">
+            <div className="flex items-center space-x-6">
+                <div>
+                    <p className="text-sm text-gray-500 dark:text-neutral-500">Current Workspace</p>
+                    <h1 className="text-lg font-bold text-gray-800 dark:text-neutral-50">{currentWorkspace.name}</h1>
+                </div>
+                <div>
+                    <p className="text-sm text-gray-500 dark:text-neutral-500">Document Title</p>
+                    <h2 className="text-md font-semibold text-gray-700 dark:text-neutral-200">Example.docx</h2>
+                </div>
+                <div>
+                    <p className="text-sm text-gray-500 dark:text-neutral-500">Project Scores</p>
+                    <h2 className="text-md font-semibold text-gray-700 dark:text-neutral-200">92%</h2>
+                </div>
+                <button className="px-4 py-2 bg-red-700 text-white rounded-lg hover:bg-red-800 transition">Auto Enhance</button>
             </div>
-
-            {/* Center: Project Scores */}
-            <div className="flex gap-8 items-center">
-                <div className="text-center">
-                    <p className="text-xs text-gray-500">Project Score</p>
-                    <p className="font-bold text-green-600">100%</p>
-                </div>
-                <div className="text-center">
-                    <p className="text-xs text-gray-500">Strategic Goals</p>
-                    <p className="font-bold text-green-600">100%</p>
-                </div>
-                <div className="text-center">
-                    <p className="text-xs text-gray-500">Regulations</p>
-                    <p className="font-bold text-green-600">100%</p>
-                </div>
-                <div className="text-center">
-                    <p className="text-xs text-gray-500">Risk Mitigation</p>
-                    <p className="font-bold text-green-600">100%</p>
-                </div>
-            </div>
-
-            {/* Right: Auto Enhance button */}
-            <button
-                className="px-5 py-2 rounded-lg bg-red-600 text-white font-bold shadow hover:bg-red-700 disabled:opacity-60"
-            >
-                Auto-Enhance
-            </button>
         </header>
     );
 };
+
 
 
 
@@ -332,7 +326,7 @@ export const Layout: React.FC<LayoutProps> = (props) => {
         <div className="flex h-screen bg-gray-100 dark:bg-neutral-950 overflow-hidden">
             <WorkspaceSidebar {...props} isCollapsed={isSidebarCollapsed} onToggleCollapse={handleToggleCollapse} />
             <div className="flex-1 flex flex-col overflow-hidden">
-                <TopNavbar {...props} />
+            <TopNavbar currentWorkspace={props.currentWorkspace} navigateTo={props.navigateTo} />
                 <main className="flex-1 overflow-y-auto">
                     {children}
                 </main>
