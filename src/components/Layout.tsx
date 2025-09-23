@@ -31,6 +31,11 @@ interface LayoutProps {
    * Layout will attempt a best-effort client-side detection from window.location.
    */
   currentScreen?: Screen;
+  
+  // Analysis screen specific props
+  activeReport?: any; // Replace with proper AnalysisReport type
+  onAutoEnhance?: () => void;
+  isEnhancing?: boolean;
 }
 
 const UserProfileDropdown: React.FC<{ navigateTo: NavigateTo; onLogout: () => void; onManageMembers: () => void }> = ({ navigateTo, onLogout, onManageMembers }) => (
@@ -279,13 +284,74 @@ const WorkspaceSidebar: React.FC<Pick<LayoutProps, 'currentUser' | 'onLogout' | 
     );
 };
 
-const TopNavbar: React.FC<{ currentWorkspace: Workspace | null; isAnalysis?: boolean }> = 
-({ currentWorkspace, isAnalysis }) => {
-    // Hide the global topnavbar when in analysis screen
-    if (isAnalysis) {
-        return null;
+const TopNavbar: React.FC<{ 
+    currentWorkspace: Workspace | null; 
+    isAnalysis?: boolean;
+    activeReport?: any; // You can type this properly with your AnalysisReport type
+    onAutoEnhance?: () => void;
+    isEnhancing?: boolean;
+}> = ({ currentWorkspace, isAnalysis, activeReport, onAutoEnhance, isEnhancing }) => {
+    // Show Analysis header when in analysis screen
+    if (isAnalysis && currentWorkspace && activeReport) {
+        return (
+            <header className="bg-white dark:bg-neutral-900 border-b border-gray-200 dark:border-neutral-800 flex-shrink-0 z-10">
+                <div className="max-w-7xl mx-auto px-6 py-4">
+                    <div className="flex items-center justify-between gap-6">
+                        {/* Left: Workspace title */}
+                        <div className="min-w-0">
+                            <h1 className="text-xl font-bold text-gray-900 dark:text-neutral-50 truncate">
+                                {currentWorkspace.name}
+                            </h1>
+                        </div>
+
+                        {/* Center: Metrics */}
+                        <div className="flex items-center gap-8 overflow-x-auto">
+                            <div className="text-center min-w-[80px]">
+                                <p className="text-sm text-gray-600 dark:text-neutral-400">Project Score</p>
+                                <p className="font-bold text-green-600 text-lg">{activeReport.scores?.project ?? 100}%</p>
+                            </div>
+
+                            <div className="text-center min-w-[80px]">
+                                <p className="text-sm text-gray-600 dark:text-neutral-400">Strategic Goals</p>
+                                <p className="font-bold text-green-600 text-lg">{activeReport.scores?.strategicGoals ?? 100}%</p>
+                            </div>
+
+                            <div className="text-center min-w-[80px]">
+                                <p className="text-sm text-gray-600 dark:text-neutral-400">Regulations</p>
+                                <p className="font-bold text-green-600 text-lg">{activeReport.scores?.regulations ?? 100}%</p>
+                            </div>
+
+                            <div className="text-center min-w-[80px]">
+                                <p className="text-sm text-gray-600 dark:text-neutral-400">Risk Mitigation</p>
+                                <p className="font-bold text-green-600 text-lg">{activeReport.scores?.risk ?? 100}%</p>
+                            </div>
+                        </div>
+
+                        {/* Right: Auto-Enhance button */}
+                        <div className="min-w-[140px]">
+                            <button
+                                onClick={onAutoEnhance}
+                                disabled={isEnhancing}
+                                className="w-full px-4 py-2 bg-red-600 text-white font-bold rounded-lg shadow hover:bg-red-700 disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                                aria-label="Auto Enhance"
+                            >
+                                {isEnhancing ? (
+                                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                ) : (
+                                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                                        <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                                    </svg>
+                                )}
+                                Auto-Enhance
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </header>
+        );
     }
 
+    // Regular topnavbar for non-analysis screens
     if (!currentWorkspace) {
         return <header className="bg-white dark:bg-neutral-900 h-[73px] border-b border-gray-200 dark:border-neutral-800 flex-shrink-0 z-10" />;
     }
@@ -330,7 +396,13 @@ export const Layout: React.FC<LayoutProps> = (props) => {
         <div className="flex h-screen bg-gray-100 dark:bg-neutral-950 overflow-hidden">
             <WorkspaceSidebar {...props} isCollapsed={isSidebarCollapsed} onToggleCollapse={handleToggleCollapse} />
             <div className="flex-1 flex flex-col overflow-hidden">
-                <TopNavbar currentWorkspace={props.currentWorkspace} isAnalysis={isAnalysisScreen} />
+                <TopNavbar 
+                    currentWorkspace={props.currentWorkspace} 
+                    isAnalysis={isAnalysisScreen}
+                    activeReport={props.activeReport}
+                    onAutoEnhance={props.onAutoEnhance}
+                    isEnhancing={props.isEnhancing}
+                />
                 <main className="flex-1 overflow-y-auto">
                     {children}
                 </main>
