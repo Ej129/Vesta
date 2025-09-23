@@ -163,7 +163,13 @@ function textToNeatHtml(input: string): string {
     if (isBullet(line) || isOrdered(line)) {
       if (pbuf.length) out.push(flushParagraph(pbuf)), (pbuf = []);
       const isOrderedNow = isOrdered(line);
-      const content = line.replace(/^([-•\u2022]\s+|(\(?\d+\)|\d+[.)])\s+|(Phase\s+\d+\s*:?)\s*/i, "").trim();
+      // Strip common list markers using simple, safe expressions
+      let content = line
+        .replace(/^[-\u2022•]\s+/, "")
+        .replace(/^\(?\d+\)\s+/, "")
+        .replace(/^\d+[.)]\s+/, "")
+        .replace(/^Phase\s+\d+\s*:?\s*/i, "")
+        .trim();
       const desiredMode: 'ul' | 'ol' = isOrderedNow ? 'ol' : 'ul';
       if (listMode && listMode !== desiredMode) flushList();
       listMode = desiredMode;
