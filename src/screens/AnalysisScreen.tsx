@@ -117,19 +117,86 @@ function injectSnippetIdsIntoHtml(html: string, findings: Finding[] = []) {
 function textToNeatHtml(input: string): string {
   if (!input) return "";
   const normalized = input.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-  const blocks = normalized
-    .split(/\n{2,}/) // split on blank lines
-    .map((block) => block.trim())
-    .filter((b) => b.length > 0);
+  const lines = normalized.split(/\n/).map((l) => l.trimEnd());
 
-  const html = blocks
-    .map((block) => {
-      const lines = block.split(/\n/).map((l) => escapeHtml(l));
-      return `<p>${lines.join("<br />")}</p>`;
-    })
-    .join("\n");
+  const isEmpty = (s: string) => s.trim().length === 0;
+  const isHeading = (s: string) => {
+    if (s.length === 0) return false;
+    if (/^\s*(project|executive|summary|budget|timeline|scope|introduction|overview)[:]/i.test(s)) return true;
+    if (s.length <= 60 && /[:—-]$/.test(s)) return true;
+    if (s.length <= 60 && /^[A-Z][A-Za-z0-9()\-\s]+$/.test(s) && !/[.!?]$/.test(s)) return true;
+    return false;
+  };
+  const isBullet = (s: string) => /^[-•\u2022]\s+/.test(s);
+  const isOrdered = (s: string) => /^(\(?\d+\)|\d+[.)])\s+/.test(s) || /^(Phase\s+\d+)/i.test(s);
 
-  return html;
+  const flushParagraph = (buf: string[]): string => {
+    if (buf.length === 0) return "";
+    const html = escapeHtml(buf.join(" ")).replace(/\s{2,}/g, " ");
+    return `<p>${html}</p>`;
+  };
+
+  const out: string[] = [];
+  let pbuf: string[] = [];
+  let listMode: null | 'ul' | 'ol' = null;
+  let listItems: string[] = [];
+
+  const flushList = () => {
+    if (!listMode || listItems.length === 0) return;
+    const items = listItems
+      .map((item) => `<li>${escapeHtml(item)}</li>`) // items are plain text
+      .join("");
+    out.push(`<${listMode}>${items}</${listMode}>`);
+    listMode = null;
+    listItems = [];
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    if (isEmpty(line)) {
+      flushList();
+      if (pbuf.length) out.push(flushParagraph(pbuf)), (pbuf = []);
+      continue;
+    }
+
+    if (isBullet(line) || isOrdered(line)) {
+      if (pbuf.length) out.push(flushParagraph(pbuf)), (pbuf = []);
+      const isOrderedNow = isOrdered(line);
+      const content = line.replace(/^([-•\u2022]\s+|(\(?\d+\)|\d+[.)])\s+|(Phase\s+\d+\s*:?)\s*/i, "").trim();
+      const desiredMode: 'ul' | 'ol' = isOrderedNow ? 'ol' : 'ul';
+      if (listMode && listMode !== desiredMode) flushList();
+      listMode = desiredMode;
+      listItems.push(content);
+      // If next line is not list, we will flush at transition
+      const next = lines[i + 1] ?? '';
+      if (!(isBullet(next) || isOrdered(next))) {
+        flushList();
+      }
+      continue;
+    }
+
+    // headings
+    if (isHeading(line)) {
+      flushList();
+      if (pbuf.length) out.push(flushParagraph(pbuf)), (pbuf = []);
+      out.push(`<h3>${escapeHtml(line.replace(/[:—-]+$/,'').trim())}</h3>`);
+      continue;
+    }
+
+    // paragraph heuristics: if previous paragraph line ends with period and this starts with capital, break
+    const prev = pbuf[pbuf.length - 1] || '';
+    if (prev && /[.!?)]$/.test(prev) && /^[A-Z(]/.test(line)) {
+      out.push(flushParagraph(pbuf));
+      pbuf = [line];
+    } else {
+      pbuf.push(line);
+    }
+  }
+
+  flushList();
+  if (pbuf.length) out.push(flushParagraph(pbuf));
+  return out.join("\n");
 }
 
 function diffToPlainText(diff?: string | null) {
