@@ -279,15 +279,19 @@ const WorkspaceSidebar: React.FC<Pick<LayoutProps, 'currentUser' | 'onLogout' | 
     );
 };
 
-const TopNavbar: React.FC<Pick<LayoutProps, 'currentWorkspace'> & { isAnalysis: boolean }> = 
+const TopNavbar: React.FC<{ currentWorkspace: Workspace | null; isAnalysis?: boolean }> = 
 ({ currentWorkspace, isAnalysis }) => {
-    // If we are in the Analysis screen, do not render the global top bar.
-    if (isAnalysis) {
-        return null;
+    // detect if we are in analysis screen (prefer explicit flag if provided)
+    const isAnalysisScreen = typeof isAnalysis === 'boolean' 
+        ? isAnalysis 
+        : window.location.pathname.includes("analysis");
+
+    if (isAnalysisScreen) {
+        return null; // don't render global header
     }
 
     if (!currentWorkspace) {
-        return <header className="bg-white dark:bg-neutral-900 h-[73px] px-6 border-b border-gray-200 dark:border-neutral-800 flex-shrink-0 z-10" />;
+        return <header className="bg-white dark:bg-neutral-900 h-[73px] border-b border-gray-200 dark:border-neutral-800 flex-shrink-0 z-10" />;
     }
 
     return (
