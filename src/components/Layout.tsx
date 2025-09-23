@@ -281,13 +281,9 @@ const WorkspaceSidebar: React.FC<Pick<LayoutProps, 'currentUser' | 'onLogout' | 
 
 const TopNavbar: React.FC<{ currentWorkspace: Workspace | null; isAnalysis?: boolean }> = 
 ({ currentWorkspace, isAnalysis }) => {
-    // detect if we are in analysis screen (prefer explicit flag if provided)
-    const isAnalysisScreen = typeof isAnalysis === 'boolean' 
-        ? isAnalysis 
-        : window.location.pathname.includes("analysis");
-
-    if (isAnalysisScreen) {
-        return null; // don't render global header
+    // Hide the global topnavbar when in analysis screen
+    if (isAnalysis) {
+        return null;
     }
 
     if (!currentWorkspace) {
@@ -308,28 +304,20 @@ export const Layout: React.FC<LayoutProps> = (props) => {
     const { children } = props;
     const [isSidebarCollapsed, setSidebarCollapsed] = useState(localStorage.getItem('vesta-sidebar-collapsed') === 'true');
 
-    const [isAnalysis, setIsAnalysis] = useState(false);
-
-    // Detect analysis screen:
-    //  - prefer explicit prop `currentScreen` if passed,
-    //  - otherwise fallback to client pathname check (best-effort).
-    useEffect(() => {
-      let detected = false;
-      try {
-        if (props.currentScreen === Screen.Analysis) detected = true;
-      } catch (e) {
-        // ignore
-      }
-
-      if (!detected && typeof window !== 'undefined') {
-        const p = window.location.pathname || '';
-        // best-effort check for "analysis" in path - adjust if your route differs
-        if (p.toLowerCase().includes('/analysis') || p.toLowerCase().includes('analysis')) {
-          detected = true;
+    // Detect analysis screen based on currentScreen prop or URL path
+    const isAnalysisScreen = React.useMemo(() => {
+        // First, check if explicit currentScreen prop is provided
+        if (props.currentScreen === Screen.Analysis) {
+            return true;
         }
-      }
-
-      setIsAnalysis(detected);
+        
+        // Fallback to URL-based detection (client-side only)
+        if (typeof window !== 'undefined') {
+            const pathname = window.location.pathname.toLowerCase();
+            return pathname.includes('analysis');
+        }
+        
+        return false;
     }, [props.currentScreen]);
 
     const handleToggleCollapse = () => {
@@ -342,7 +330,7 @@ export const Layout: React.FC<LayoutProps> = (props) => {
         <div className="flex h-screen bg-gray-100 dark:bg-neutral-950 overflow-hidden">
             <WorkspaceSidebar {...props} isCollapsed={isSidebarCollapsed} onToggleCollapse={handleToggleCollapse} />
             <div className="flex-1 flex flex-col overflow-hidden">
-            <TopNavbar currentWorkspace={props.currentWorkspace} isAnalysis={isAnalysis} />
+                <TopNavbar currentWorkspace={props.currentWorkspace} isAnalysis={isAnalysisScreen} />
                 <main className="flex-1 overflow-y-auto">
                     {children}
                 </main>

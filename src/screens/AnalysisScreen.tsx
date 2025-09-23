@@ -37,8 +37,9 @@ import {
 /* --------------------------------------------------------------------------
   NOTES:
   - Keep docx & jspdf installed: npm i docx jspdf
-  - Header updated: Top row = Workspace + scores + AutoEnhance.
-    Sub-row = workspace label + document title + Download + Edit/Save.
+  - Single header with workspace title, metrics, and Auto-Enhance button
+  - Document content below with title edit and controls
+  - Analysis panel on the right
   -------------------------------------------------------------------------- */
 
 /* -------------------- Utilities & Sanitizer -------------------- */
@@ -148,48 +149,6 @@ const BackButton: React.FC<{ onBack: () => void; title?: string }> = ({ onBack, 
   </button>
 );
 
-/* --------------------------- Enhance Controls --------------------------- */
-
-const EnhanceControls: React.FC<{
-  activeReport: AnalysisReport;
-  onAutoEnhance?: (report?: AnalysisReport) => Promise<void> | void;
-  isEnhancing?: boolean;
-  isAnalyzing?: boolean;
-}> = ({ activeReport, onAutoEnhance, isEnhancing, isAnalyzing }) => {
-  const busy = !!isEnhancing || !!isAnalyzing;
-  const buttonText = isEnhancing ? "Enhancing…" : isAnalyzing ? "Analyzing…" : "Auto-Enhance";
-
-  const handleClick = async () => {
-    if (busy || !activeReport || typeof onAutoEnhance !== "function") return;
-    try {
-      await onAutoEnhance(activeReport);
-    } catch (err) {
-      console.error("AutoEnhance error:", err);
-    }
-  };
-
-  return (
-    <div className="w-full">
-      <button
-        onClick={handleClick}
-        disabled={busy}
-        aria-label="Auto Enhance Document"
-        className={`inline-flex items-center justify-center gap-3 px-4 py-2 rounded-lg font-bold text-white shadow-md w-full transition ${
-          busy ? "bg-gray-400 cursor-not-allowed" : "bg-red-600 hover:bg-red-700"
-        }`}
-        title={busy ? "Operation in progress" : "Automatically improve this document using AI"}
-      >
-        {isEnhancing ? (
-          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-        ) : (
-          <SparklesIcon className="w-4 h-4" />
-        )}
-        {buttonText}
-      </button>
-    </div>
-  );
-};
-
 /* -------------------------- Download Dropdown -------------------------- */
 
 const DownloadDropdown: React.FC<{
@@ -270,7 +229,6 @@ const DocumentEditor: React.FC<{
   onDownloadDocx: () => void;
   hoveredFindingId: string | null;
   selectedFindingId: string | null;
-  hideHeader?: boolean; // <-- added prop to hide the internal header when screen provides it
 }> = ({
   report,
   isEditing,
@@ -282,7 +240,6 @@ const DocumentEditor: React.FC<{
   onDownloadDocx,
   hoveredFindingId,
   selectedFindingId,
-  hideHeader = false,
 }) => {
   const [showComparison, setShowComparison] = useState(true);
 
@@ -329,41 +286,43 @@ const DocumentEditor: React.FC<{
     <div className="bg-white rounded-xl shadow-lg border border-gray-200 flex flex-col min-h-[60vh]">
       {markFlashStyle}
 
-      {/* internal header: only render when not hidden by outer screen header */}
-      {!hideHeader && (
-        <div className="p-4 flex items-start justify-between border-b">
-          <div className="pr-4 min-w-0">
-            <p className="text-xs text-gray-500">
-              {report.workspaceId ? report.workspaceId.replace("-", " ").toUpperCase() : "WORKSPACE"}
-            </p>
-            <h2 className="font-bold text-lg text-gray-900 truncate">{report.title}</h2>
-          </div>
-
-          <div className="flex items-center gap-2">
-            {report.diffContent ? (
-              <button
-                onClick={() => setShowComparison((s) => !s)}
-                className="px-3 py-1.5 rounded-lg border text-sm"
-                aria-pressed={!showComparison}
-              >
-                {showComparison ? "Enhanced Only" : "Compare"}
-              </button>
-            ) : null}
-
-            <DownloadDropdown onDownloadPdf={onDownloadPdf} onDownloadTxt={onDownloadTxt} onDownloadDocx={onDownloadDocx} />
-
-            {isEditing ? (
-              <button onClick={onSaveChanges} className="px-4 py-1.5 bg-red-600 text-white rounded-lg font-bold" aria-label="Save Draft">
-                Save Draft
-              </button>
-            ) : (
-              <button onClick={onToggleEdit} className="p-2 rounded-lg hover:bg-gray-100" title="Edit Document" aria-label="Edit Document">
-                <EditIcon className="w-5 h-5" />
-              </button>
-            )}
-          </div>
+      {/* Document title and controls */}
+      <div className="p-4 flex items-center justify-between border-b">
+        <div className="flex-1 min-w-0">
+          <input
+            type="text"
+            value={report.title ?? ""}
+            onChange={(e) => onContentChange && report && onContentChange(report.documentContent)}
+            className="text-xl font-bold text-gray-900 bg-transparent border-none focus:outline-none focus:ring-0 w-full"
+            placeholder="Document Title"
+            aria-label="Edit document title"
+          />
         </div>
-      )}
+
+        <div className="flex items-center gap-2 ml-4">
+          {report.diffContent ? (
+            <button
+              onClick={() => setShowComparison((s) => !s)}
+              className="px-3 py-1.5 rounded-lg border text-sm"
+              aria-pressed={!showComparison}
+            >
+              {showComparison ? "Enhanced Only" : "Compare"}
+            </button>
+          ) : null}
+
+          <DownloadDropdown onDownloadPdf={onDownloadPdf} onDownloadTxt={onDownloadTxt} onDownloadDocx={onDownloadDocx} />
+
+          {isEditing ? (
+            <button onClick={onSaveChanges} className="px-4 py-1.5 bg-red-600 text-white rounded-lg font-bold" aria-label="Save Draft">
+              Save Draft
+            </button>
+          ) : (
+            <button onClick={onToggleEdit} className="p-2 rounded-lg hover:bg-gray-100" title="Edit Document" aria-label="Edit Document">
+              <EditIcon className="w-5 h-5" />
+            </button>
+          )}
+        </div>
+      </div>
 
       <div className="p-6 flex-1 overflow-auto">
         {isEditing ? (
@@ -390,23 +349,6 @@ const DocumentEditor: React.FC<{
           <div className="prose max-w-none" dangerouslySetInnerHTML={{ __html: report.diffContent ? getEnhancedHtml : getOriginalHtml }} />
         )}
       </div>
-    </div>
-  );
-};
-
-/* ----------------------------- Score Card ---------------------------- */
-
-const ScoreCard: React.FC<{ label: string; score: number }> = ({ label, score }) => {
-  const getScoreColor = (s: number) => {
-    if (s >= 90) return "text-green-600";
-    if (s >= 70) return "text-yellow-600";
-    return "text-red-600";
-  };
-
-  return (
-    <div className="bg-gray-50 p-3 rounded-lg border">
-      <p className="text-xs text-gray-500 truncate">{label}</p>
-      <p className={`text-2xl font-bold ${getScoreColor(score)}`}>{score}<span className="text-sm font-normal">%</span></p>
     </div>
   );
 };
@@ -766,14 +708,11 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
     try {
       const updatedReport = { ...currentReport, title: newTitle ?? currentReport.title };
       setCurrentReport(updatedReport);
-      // call parent updater so the change persists upward
       try {
         onUpdateReport(updatedReport);
       } catch (err) {
         console.warn("onUpdateReport failed in saveReportTitle:", err);
       }
-      // Optionally: call a backend endpoint to persist the title
-      // await workspaceApi.updateReportTitle?.(reportId, { title: newTitle });
     } catch (err) {
       console.error("Failed to save report title:", err);
     }
@@ -793,7 +732,7 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
 
   return (
     <div className="relative h-full bg-gray-50 min-h-screen">
-      {/* Back button (kept for convenience) */}
+      {/* Back button */}
       <div className="absolute top-4 left-4 z-20">
         <BackButton onBack={handleBack} />
       </div>
@@ -809,103 +748,64 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
         </div>
       )}
 
-      {/* Top header: Workspace + Metrics + Auto-Enhance */}
+      {/* Single header with workspace title, metrics, and Auto-Enhance */}
       <header className="w-full bg-white border-b shadow-sm">
-        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between gap-6">
-          {/* Left: Workspace title */}
-          <div className="min-w-0">
-            <p className="text-xs text-gray-500">CURRENT WORKSPACE</p>
-            <h1 className="text-lg font-bold text-gray-900 truncate">
-              {currentReport.workspaceId ? currentReport.workspaceId.replace("-", " ").toUpperCase() : "CURRENT WORKSPACE"}
-            </h1>
-          </div>
-
-          {/* Center: Metrics aligned & responsive */}
-          <div className="flex-1 flex items-center justify-center gap-8 overflow-x-auto py-1">
-            <div className="text-center min-w-[96px]">
-              <p className="text-sm text-gray-600">Project Score</p>
-              <p className="font-bold text-green-600">{currentReport.scores?.project ?? 100}%</p>
+        <div className="max-w-7xl mx-auto px-6 py-4">
+          <div className="flex items-center justify-between gap-6">
+            {/* Left: Workspace title */}
+            <div className="min-w-0">
+              <h1 className="text-xl font-bold text-gray-900 truncate">
+                {currentReport.workspaceId ? currentReport.workspaceId.replace("-", " ").toUpperCase() : "WORKSPACE TITLE"}
+              </h1>
             </div>
 
-            <div className="text-center min-w-[96px]">
-              <p className="text-sm text-gray-600">Strategic Goals</p>
-              <p className="font-bold text-green-600">{currentReport.scores?.strategicGoals ?? 100}%</p>
-            </div>
-
-            <div className="text-center min-w-[96px]">
-              <p className="text-sm text-gray-600">Regulations</p>
-              <p className="font-bold text-green-600">{currentReport.scores?.regulations ?? 100}%</p>
-            </div>
-
-            <div className="text-center min-w-[96px]">
-              <p className="text-sm text-gray-600">Risk Mitigation</p>
-              <p className="font-bold text-green-600">{currentReport.scores?.risk ?? 100}%</p>
-            </div>
-          </div>
-
-          {/* Right: Auto-Enhance */}
-          <div className="w-44">
-            <button
-              onClick={handleAutoEnhance}
-              disabled={isEnhancing}
-              className="w-full px-4 py-2 rounded-lg bg-red-600 text-white font-bold shadow hover:bg-red-700 disabled:opacity-60"
-              aria-label="Auto Enhance"
-            >
-              Auto-Enhance
-            </button>
-          </div>
-        </div>
-
-        {/* Sub-header: Document title + download & edit */}
-        <div className="max-w-7xl mx-auto px-6 py-3 border-t">
-          <div className="flex items-center justify-between gap-4">
-            <div className="flex items-center gap-6 min-w-0">
-              <div className="min-w-0">
-                <p className="text-xs text-gray-500">Current Workspace</p>
-                <p className="text-sm text-gray-700 truncate">{currentReport.workspaceId ? currentReport.workspaceId.replace("-", " ").toUpperCase() : "WORKSPACE"}</p>
+            {/* Center: Metrics */}
+            <div className="flex items-center gap-8 overflow-x-auto">
+              <div className="text-center min-w-[80px]">
+                <p className="text-sm text-gray-600">Project Score</p>
+                <p className="font-bold text-green-600 text-lg">{currentReport.scores?.project ?? 100}%</p>
               </div>
 
-              {/* Editable document title */}
-              <div className="min-w-0 flex-1">
-                <p className="text-xs text-gray-500">Document Title</p>
-                <input
-                  type="text"
-                  value={currentReport.title ?? ""}
-                  onChange={(e) => setCurrentReport({ ...currentReport, title: e.target.value })}
-                  onBlur={() => saveReportTitle(currentReport?.id, currentReport?.title)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      (e.target as HTMLInputElement).blur();
-                    }
-                  }}
-                  className="text-base font-semibold text-gray-900 bg-transparent border-none focus:outline-none focus:ring-0 truncate w-full"
-                  aria-label="Edit document title"
-                />
+              <div className="text-center min-w-[80px]">
+                <p className="text-sm text-gray-600">Strategic Goals</p>
+                <p className="font-bold text-green-600 text-lg">{currentReport.scores?.strategicGoals ?? 100}%</p>
+              </div>
+
+              <div className="text-center min-w-[80px]">
+                <p className="text-sm text-gray-600">Regulations</p>
+                <p className="font-bold text-green-600 text-lg">{currentReport.scores?.regulations ?? 100}%</p>
+              </div>
+
+              <div className="text-center min-w-[80px]">
+                <p className="text-sm text-gray-600">Risk Mitigation</p>
+                <p className="font-bold text-green-600 text-lg">{currentReport.scores?.risk ?? 100}%</p>
               </div>
             </div>
 
-            {/* Right-side: Download & Edit controls */}
-            <div className="flex items-center gap-3">
-              <DownloadDropdown onDownloadPdf={handleDownloadPdf} onDownloadTxt={handleDownloadTxt} onDownloadDocx={handleDownloadDocx} />
-
-              {isEditing ? (
-                <button onClick={handleSaveChanges} className="px-4 py-2 bg-red-600 text-white rounded-lg font-bold">
-                  Save Draft
-                </button>
-              ) : (
-                <button onClick={() => setIsEditing((s) => !s)} className="p-2 rounded-lg hover:bg-gray-100" title="Edit Document" aria-label="Edit Document">
-                  <EditIcon className="w-5 h-5" />
-                </button>
-              )}
+            {/* Right: Auto-Enhance button */}
+            <div className="min-w-[140px]">
+              <button
+                onClick={handleAutoEnhance}
+                disabled={isEnhancing}
+                className="w-full px-4 py-2 bg-red-600 text-white font-bold rounded-lg shadow hover:bg-red-700 disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                aria-label="Auto Enhance"
+              >
+                {isEnhancing ? (
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  <SparklesIcon className="w-4 h-4" />
+                )}
+                Auto-Enhance
+              </button>
             </div>
           </div>
         </div>
       </header>
 
-      {/* Main content grid: Document (left; span2), Findings + Chat (right) */}
-      <main className="max-w-7xl mx-auto p-6 grid grid-cols-1 xl:grid-cols-3 gap-6">
-        {/* Document area (span 2) */}
-        <section className="xl:col-span-2">
+      {/* Main content: Document on left, Analysis panel on right */}
+      <main className="max-w-7xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-4 gap-6">
+        {/* Document area (3/4 width) */}
+        <section className="lg:col-span-3">
           <DocumentEditor
             report={currentReport}
             isEditing={isEditing}
@@ -917,31 +817,29 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
             onDownloadDocx={handleDownloadDocx}
             hoveredFindingId={hoveredFindingId}
             selectedFindingId={selectedFindingId}
-            hideHeader={true} // important: we moved title/download/edit to the sub-header above
           />
         </section>
 
-        {/* Right column */}
-        <aside className="xl:col-span-1 space-y-6">
+        {/* Right column: Analysis panel (1/4 width) */}
+        <aside className="lg:col-span-1 space-y-6">
+          {/* Actionable Findings */}
           <div className="bg-white rounded-xl shadow p-4 border">
-            <h4 className="font-bold">Actionable Findings ({activeFindings.length})</h4>
-            <div className="mt-3">
-              {activeFindings.length > 0 ? (
-                <ActionableFindings
-                  findings={activeFindings}
-                  onDismiss={(f) => setFeedbackFinding(f)}
-                  onResolve={(id) => handleFindingStatusChange(id, "resolved")}
-                  onHover={(id) => setHoveredFindingId(id)}
-                  onClick={handleFindingClick}
-                />
-              ) : (
-                <div className="text-center p-6">
-                  <CheckCircleIcon className="w-12 h-12 mx-auto text-green-500" />
-                  <p className="font-semibold mt-3">Excellent! No Active Findings</p>
-                  <p className="text-sm text-gray-500">This document meets all compliance checks.</p>
-                </div>
-              )}
-            </div>
+            <h4 className="font-bold mb-3">Actionable Findings ({activeFindings.length})</h4>
+            {activeFindings.length > 0 ? (
+              <ActionableFindings
+                findings={activeFindings}
+                onDismiss={(f) => setFeedbackFinding(f)}
+                onResolve={(id) => handleFindingStatusChange(id, "resolved")}
+                onHover={(id) => setHoveredFindingId(id)}
+                onClick={handleFindingClick}
+              />
+            ) : (
+              <div className="text-center p-6">
+                <CheckCircleIcon className="w-12 h-12 mx-auto text-green-500" />
+                <p className="font-semibold mt-3">Excellent! No Active Findings</p>
+                <p className="text-sm text-gray-500">This document meets all compliance checks.</p>
+              </div>
+            )}
           </div>
 
           {/* Chat Panel */}
