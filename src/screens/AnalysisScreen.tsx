@@ -113,6 +113,25 @@ function injectSnippetIdsIntoHtml(html: string, findings: Finding[] = []) {
   return out;
 }
 
+// Convert plain text into basic HTML paragraphs and line breaks for better readability
+function textToNeatHtml(input: string): string {
+  if (!input) return "";
+  const normalized = input.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const blocks = normalized
+    .split(/\n{2,}/) // split on blank lines
+    .map((block) => block.trim())
+    .filter((b) => b.length > 0);
+
+  const html = blocks
+    .map((block) => {
+      const lines = block.split(/\n/).map((l) => escapeHtml(l));
+      return `<p>${lines.join("<br />")}</p>`;
+    })
+    .join("\n");
+
+  return html;
+}
+
 function diffToPlainText(diff?: string | null) {
   if (!diff) return "";
   if (/<\w+[^>]*>/.test(diff)) {
@@ -247,8 +266,8 @@ const DocumentEditor: React.FC<{
 
   const getOriginalHtml = useMemo(() => {
     const raw = report?.documentContent ?? "";
-    const escaped = escapeHtml(raw).replace(/\n/g, "<br />");
-    return injectSnippetIdsIntoHtml(escaped, report?.findings ?? []);
+    const neat = textToNeatHtml(raw);
+    return injectSnippetIdsIntoHtml(neat, report?.findings ?? []);
   }, [report]);
 
   const getEnhancedHtml = useMemo(() => {
@@ -261,13 +280,16 @@ const DocumentEditor: React.FC<{
       return injectSnippetIdsIntoHtml(sanitized, report?.findings ?? []);
     }
     const html = diff
-      .split("\n")
-      .map((line) => {
-        if (line.startsWith("++ ")) return `<mark class="highlight-added">${escapeHtml(line.substring(3))}</mark>`;
-        if (line.startsWith("-- ")) return `<mark class="highlight-removed"><del>${escapeHtml(line.substring(3))}</del></mark>`;
-        return escapeHtml(line);
+      .split("\n\n") // treat blank lines as paragraph breaks
+      .map((para) => {
+        const lines = para.split("\n").map((line) => {
+          if (line.startsWith("++ ")) return `<mark class="highlight-added">${escapeHtml(line.substring(3))}</mark>`;
+          if (line.startsWith("-- ")) return `<mark class="highlight-removed"><del>${escapeHtml(line.substring(3))}</del></mark>`;
+          return escapeHtml(line);
+        });
+        return `<p>${lines.join("<br />")}</p>`;
       })
-      .join("<br />");
+      .join("");
     return injectSnippetIdsIntoHtml(html, report?.findings ?? []);
   }, [report, getOriginalHtml]);
 
@@ -280,6 +302,8 @@ const DocumentEditor: React.FC<{
           100% { box-shadow: none; }
         }
         .snippet-target { padding: 0 2px; border-radius: 2px; }
+        .highlight-added { background: #ecfee8; color: #0b6312; padding: 0 2px; border-radius: 2px; }
+        .highlight-removed { background: #ffecec; color: #8a1111; padding: 0 2px; border-radius: 2px; text-decoration: line-through; }
       `
     }} />
   );
