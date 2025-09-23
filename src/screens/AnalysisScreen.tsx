@@ -283,17 +283,17 @@ const DocumentEditor: React.FC<{
   );
 
   return (
-    <div className="bg-white rounded-xl shadow-lg border border-gray-200 flex flex-col min-h-[60vh]">
+    <div className="bg-white rounded-xl shadow-lg border border-gray-200 flex flex-col h-full">
       {markFlashStyle}
 
-      {/* Document title and controls */}
-      <div className="p-4 flex items-center justify-between border-b">
+      {/* Document title and controls - more compact */}
+      <div className="p-3 flex items-center justify-between border-b bg-gray-50">
         <div className="flex-1 min-w-0">
           <input
             type="text"
             value={report.title ?? ""}
             onChange={(e) => onContentChange && report && onContentChange(report.documentContent)}
-            className="text-xl font-bold text-gray-900 bg-transparent border-none focus:outline-none focus:ring-0 w-full"
+            className="text-lg font-bold text-gray-900 bg-transparent border-none focus:outline-none focus:ring-0 w-full"
             placeholder="Document Title"
             aria-label="Edit document title"
           />
@@ -303,7 +303,7 @@ const DocumentEditor: React.FC<{
           {report.diffContent ? (
             <button
               onClick={() => setShowComparison((s) => !s)}
-              className="px-3 py-1.5 rounded-lg border text-sm"
+              className="px-3 py-1.5 rounded-lg border text-sm bg-white hover:bg-gray-50"
               aria-pressed={!showComparison}
             >
               {showComparison ? "Enhanced Only" : "Compare"}
@@ -324,17 +324,17 @@ const DocumentEditor: React.FC<{
         </div>
       </div>
 
-      <div className="p-6 flex-1 overflow-auto">
+      <div className="p-4 flex-1 overflow-auto">
         {isEditing ? (
           <textarea
             value={report.documentContent}
             onChange={(e) => onContentChange(e.target.value)}
-            className="w-full h-[60vh] bg-transparent focus:outline-none resize-none text-base leading-relaxed font-sans"
+            className="w-full h-full bg-transparent focus:outline-none resize-none text-base leading-relaxed font-sans"
             aria-label="Edit document content"
             autoFocus
           />
         ) : report.diffContent && showComparison ? (
-          <div className="grid md:grid-cols-2 gap-6">
+          <div className="grid md:grid-cols-2 gap-6 h-full">
             <div className="prose max-w-none">
               <h3 className="text-sm font-semibold text-gray-500 mb-2">Original</h3>
               <div id="original-content" className="whitespace-pre-wrap" dangerouslySetInnerHTML={{ __html: getOriginalHtml }} />
@@ -346,7 +346,7 @@ const DocumentEditor: React.FC<{
             </div>
           </div>
         ) : (
-          <div className="prose max-w-none" dangerouslySetInnerHTML={{ __html: report.diffContent ? getEnhancedHtml : getOriginalHtml }} />
+          <div className="prose max-w-none h-full" dangerouslySetInnerHTML={{ __html: report.diffContent ? getEnhancedHtml : getOriginalHtml }} />
         )}
       </div>
     </div>
@@ -731,11 +731,62 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
   const activeFindings = currentReport.findings?.filter((f) => f.status === "active") ?? [];
 
   return (
-    <div className="relative h-full bg-gray-50 min-h-screen">
-      {/* Back button */}
-      <div className="absolute top-4 left-4 z-20">
-        <BackButton onBack={handleBack} />
-      </div>
+    <div className="h-full bg-gray-50 flex flex-col">
+      {/* Fallback header - only shows if Layout doesn't have the analysis header */}
+      {!isEnhancing && (
+        <header className="bg-white border-b shadow-sm flex-shrink-0">
+          <div className="px-6 py-4">
+            <div className="flex items-center justify-between gap-6">
+              {/* Left: Workspace title */}
+              <div className="min-w-0">
+                <h1 className="text-xl font-bold text-gray-900 truncate">
+                  {currentWorkspace?.name || "WORKSPACE TITLE"}
+                </h1>
+              </div>
+
+              {/* Center: Metrics */}
+              <div className="flex items-center gap-8 overflow-x-auto">
+                <div className="text-center min-w-[80px]">
+                  <p className="text-sm text-gray-600">Project Score</p>
+                  <p className="font-bold text-green-600 text-lg">{currentReport.scores?.project ?? 100}%</p>
+                </div>
+
+                <div className="text-center min-w-[80px]">
+                  <p className="text-sm text-gray-600">Strategic Goals</p>
+                  <p className="font-bold text-green-600 text-lg">{currentReport.scores?.strategicGoals ?? 100}%</p>
+                </div>
+
+                <div className="text-center min-w-[80px]">
+                  <p className="text-sm text-gray-600">Regulations</p>
+                  <p className="font-bold text-green-600 text-lg">{currentReport.scores?.regulations ?? 100}%</p>
+                </div>
+
+                <div className="text-center min-w-[80px]">
+                  <p className="text-sm text-gray-600">Risk Mitigation</p>
+                  <p className="font-bold text-green-600 text-lg">{currentReport.scores?.risk ?? 100}%</p>
+                </div>
+              </div>
+
+              {/* Right: Auto-Enhance button */}
+              <div className="min-w-[140px]">
+                <button
+                  onClick={handleAutoEnhance}
+                  disabled={isEnhancing}
+                  className="w-full px-4 py-2 bg-red-600 text-white font-bold rounded-lg shadow hover:bg-red-700 disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                  aria-label="Auto Enhance"
+                >
+                  {isEnhancing ? (
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <SparklesIcon className="w-4 h-4" />
+                  )}
+                  Auto-Enhance
+                </button>
+              </div>
+            </div>
+          </div>
+        </header>
+      )}
 
       {/* Overlay loader when enhancing */}
       {isEnhancing && (
@@ -748,8 +799,12 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
         </div>
       )}
 
-      {/* Main content: Document on left, Analysis panel on right */}
-      <main className="max-w-7xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-4 gap-6">
+      {/* Main content with back button integrated */}
+      <main className="flex-1 p-4 grid grid-cols-1 lg:grid-cols-4 gap-4 w-full">
+        {/* Back button integrated into the main content area */}
+        <div className="lg:col-span-4 mb-2">
+          <BackButton onBack={handleBack} />
+        </div>
         {/* Document area (3/4 width) */}
         <section className="lg:col-span-3">
           <DocumentEditor
@@ -767,29 +822,31 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
         </section>
 
         {/* Right column: Analysis panel (1/4 width) */}
-        <aside className="lg:col-span-1 space-y-6">
+        <aside className="lg:col-span-1 space-y-4 flex flex-col">
           {/* Actionable Findings */}
-          <div className="bg-white rounded-xl shadow p-4 border">
+          <div className="bg-white rounded-xl shadow p-4 border flex-1 min-h-0">
             <h4 className="font-bold mb-3">Actionable Findings ({activeFindings.length})</h4>
-            {activeFindings.length > 0 ? (
-              <ActionableFindings
-                findings={activeFindings}
-                onDismiss={(f) => setFeedbackFinding(f)}
-                onResolve={(id) => handleFindingStatusChange(id, "resolved")}
-                onHover={(id) => setHoveredFindingId(id)}
-                onClick={handleFindingClick}
-              />
-            ) : (
-              <div className="text-center p-6">
-                <CheckCircleIcon className="w-12 h-12 mx-auto text-green-500" />
-                <p className="font-semibold mt-3">Excellent! No Active Findings</p>
-                <p className="text-sm text-gray-500">This document meets all compliance checks.</p>
-              </div>
-            )}
+            <div className="overflow-auto h-full">
+              {activeFindings.length > 0 ? (
+                <ActionableFindings
+                  findings={activeFindings}
+                  onDismiss={(f) => setFeedbackFinding(f)}
+                  onResolve={(id) => handleFindingStatusChange(id, "resolved")}
+                  onHover={(id) => setHoveredFindingId(id)}
+                  onClick={handleFindingClick}
+                />
+              ) : (
+                <div className="text-center p-6">
+                  <CheckCircleIcon className="w-12 h-12 mx-auto text-green-500" />
+                  <p className="font-semibold mt-3">Excellent! No Active Findings</p>
+                  <p className="text-sm text-gray-500">This document meets all compliance checks.</p>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Chat Panel */}
-          <div className="h-[420px]">
+          <div className="h-[380px] flex-shrink-0">
             <ChatPanel documentContent={currentReport.documentContent ?? ""} />
           </div>
         </aside>
