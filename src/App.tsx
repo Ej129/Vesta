@@ -895,6 +895,7 @@ case Screen.Dashboard:
             currentUser={currentUser}
             onLogout={handleLogout}
             currentWorkspace={selectedWorkspace}
+            currentScreen={currentScreen}
             workspaces={workspaces}
             onSelectWorkspace={handleSelectWorkspace}
             onManageMembers={() => setManageMembersModalOpen(true)}
