@@ -747,6 +747,60 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
 
   return (
     <div className="h-full bg-gray-50 flex flex-col">
+      {/* Header with workspace title, metrics, and Auto-Enhance */}
+      <header className="bg-white border-b shadow-sm flex-shrink-0">
+        <div className="px-6 py-4">
+          <div className="flex items-center justify-between gap-6">
+            {/* Left: Workspace title */}
+            <div className="min-w-0">
+              <h1 className="text-xl font-bold text-gray-900 truncate">
+                {currentWorkspace?.name || "WORKSPACE TITLE"}
+              </h1>
+            </div>
+
+            {/* Center: Metrics */}
+            <div className="flex items-center gap-8 overflow-x-auto">
+              <div className="text-center min-w-[80px]">
+                <p className="text-sm text-gray-600">Project Score</p>
+                <p className="font-bold text-green-600 text-lg">{currentReport.scores?.project ?? 100}%</p>
+              </div>
+
+              <div className="text-center min-w-[80px]">
+                <p className="text-sm text-gray-600">Strategic Goals</p>
+                <p className="font-bold text-green-600 text-lg">{currentReport.scores?.strategicGoals ?? 100}%</p>
+              </div>
+
+              <div className="text-center min-w-[80px]">
+                <p className="text-sm text-gray-600">Regulations</p>
+                <p className="font-bold text-green-600 text-lg">{currentReport.scores?.regulations ?? 100}%</p>
+              </div>
+
+              <div className="text-center min-w-[80px]">
+                <p className="text-sm text-gray-600">Risk Mitigation</p>
+                <p className="font-bold text-green-600 text-lg">{currentReport.scores?.risk ?? 100}%</p>
+              </div>
+            </div>
+
+            {/* Right: Auto-Enhance button */}
+            <div className="min-w-[140px]">
+              <button
+                onClick={handleAutoEnhance}
+                disabled={isEnhancing}
+                className="w-full px-4 py-2 bg-red-600 text-white font-bold rounded-lg shadow hover:bg-red-700 disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                aria-label="Auto Enhance"
+              >
+                {isEnhancing ? (
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  <SparklesIcon className="w-4 h-4" />
+                )}
+                Auto-Enhance
+              </button>
+            </div>
+          </div>
+        </div>
+      </header>
+
       {/* Overlay loader when enhancing */}
       {isEnhancing && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-white/80 backdrop-blur-sm">
