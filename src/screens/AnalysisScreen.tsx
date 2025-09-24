@@ -36,13 +36,11 @@ import {
 
 /* --------------------------------------------------------------------------
   NOTES / USAGE
-  - This file is an updated, cleaned-up rewrite of the AnalysisScreen.
-  - For best appearance, enable Tailwind Typography plugin:
-      npm i @tailwindcss/typography
+  - For best appearance enable Tailwind Typography plugin:
+    npm i @tailwindcss/typography
     and add to tailwind.config.js -> plugins: [require('@tailwindcss/typography')]
-
   - Keep docx & jspdf installed: npm i docx jspdf
-  -------------------------------------------------------------------------- */
+----------------------------------------------------------------------------*/
 
 /* -------------------- Utilities & Sanitizer -------------------- */
 
@@ -54,7 +52,7 @@ const escapeHtml = (unsafe: string) =>
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
 
-const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&");
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 // Conservative whitelist sanitizer for small HTML fragments (used for diffs)
 function sanitizeHtmlAllowlist(html: string) {
@@ -119,15 +117,16 @@ function injectSnippetIdsIntoHtml(html: string, findings: Finding[] = []) {
   return out;
 }
 
-// Convert plain text into basic HTML paragraphs and line breaks for better readability
+/* ---------------- Improved text => neat HTML converter ------------------ */
+/* Generic, robust formatter for proposals, budgets, timelines, etc.        */
 function textToNeatHtml(input: string): string {
   if (!input) return "";
 
-  const normalized = input.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const normalized = input.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
 
-  // Split on newlines OR after sentence breaks (period + space + capital)
+  // Aggressive segmentation: split on double-newlines (paragraphs) OR sentence breaks
   const segments = normalized
-    .split(/(?<=\.)\s+(?=[A-Z])|[\n]+/)
+    .split(/(?<=\.)\s+(?=[A-Z])|[\n]{2,}/)
     .map((s) => s.trim())
     .filter(Boolean);
 
@@ -135,7 +134,7 @@ function textToNeatHtml(input: string): string {
 
   // --- Detection helpers ---
   const isHeading = (s: string) =>
-    /^(executive summary|summary|introduction|scope|background|conclusion|findings|analysis|recommendations|budget|project timeline|methodology|objectives)[:]?$/i.test(
+    /^(executive summary|summary|introduction|scope|background|conclusion|findings|analysis|recommendations|budget|project timeline|timeline|methodology|objectives|deliverables)[:]?$/i.test(
       s
     ) ||
     (/^[A-Z0-9\s\-&]{3,}$/.test(s) && s.length < 80); // ALL CAPS short lines
@@ -146,10 +145,14 @@ function textToNeatHtml(input: string): string {
     /^\(?[a-zA-Z]\)\s+/.test(s) ||
     /^(phase|step)\s+\d+/i.test(s);
 
+  // label: value lines like "Project Title: SecurePay PH" (not headings)
   const isFieldLabel = (s: string) =>
-    /^[A-Z][\w\s()]+:\s+.+/.test(s) && !isHeading(s);
+    /^[A-Z][\w\s().,-]{0,80}:\s+.+/.test(s) && !isHeading(s);
 
-  // --- Utilities ---
+  // --- Utilities & state ---
+  let listMode: null | "ul" | "ol" = null;
+  let listItems: string[] = [];
+
   const flushList = () => {
     if (!listMode || listItems.length === 0) return;
     const items = listItems.map((x) => `<li>${escapeHtml(x)}</li>`).join("");
@@ -158,69 +161,80 @@ function textToNeatHtml(input: string): string {
     listItems = [];
   };
 
-  const addParagraph = (s: string) =>
-    out.push(`<p>${escapeHtml(s)}</p>`);
+  const addParagraph = (s: string) => out.push(`<p>${escapeHtml(s)}</p>`);
 
-  // --- State ---
-  let listMode: null | "ul" | "ol" = null;
-  let listItems: string[] = [];
+  // If original text had single-line blocks with many "Label: Value Label2: Value2", try splitting those into labeled paragraphs
+  const trySplitInlineLabels = (s: string) => {
+    // find sequences like "Label1: value1 Label2: value2"
+    const parts = s.split(/(?<=\w:\s[^:]+)\s(?=[A-Z][\w\s()\-]{1,20}:)/g);
+    if (parts.length > 1) return parts.map((p) => p.trim()).filter(Boolean);
+    return [s];
+  };
 
   // --- Main loop ---
-  for (const seg of segments) {
-    if (isHeading(seg)) {
-      flushList();
-      out.push(`<h3>${escapeHtml(seg.replace(/:$/, ""))}</h3>`);
-      continue;
-    }
+  for (const segRaw of segments) {
+    // try splitting inline labels first (e.g., "Budget: X Total: Y")
+    const subSegments = trySplitInlineLabels(segRaw);
 
-    if (isBullet(seg)) {
-      if (listMode !== "ul") {
+    for (const seg of subSegments) {
+      if (!seg) continue;
+
+      if (isHeading(seg)) {
         flushList();
-        listMode = "ul";
+        out.push(`<h3>${escapeHtml(seg.replace(/:$/, ""))}</h3>`);
+        continue;
       }
-      listItems.push(seg.replace(/^[-•\u2022\*]\s+/, "").trim());
-      continue;
-    }
 
-    if (isOrdered(seg)) {
-      if (listMode !== "ol") {
+      if (isBullet(seg)) {
+        if (listMode !== "ul") {
+          flushList();
+          listMode = "ul";
+        }
+        listItems.push(seg.replace(/^[-•\u2022\*]\s+/, "").trim());
+        continue;
+      }
+
+      if (isOrdered(seg)) {
+        if (listMode !== "ol") {
+          flushList();
+          listMode = "ol";
+        }
+        listItems.push(
+          seg
+            .replace(/^\(?\d+\)\s+/, "")
+            .replace(/^\d+[.)]\s+/, "")
+            .replace(/^\(?[a-zA-Z]\)\s+/, "")
+            .replace(/^(phase|step)\s+\d+:?\s*/i, "")
+            .trim()
+        );
+        continue;
+      }
+
+      if (isFieldLabel(seg)) {
         flushList();
-        listMode = "ol";
+        const [label, ...rest] = seg.split(":");
+        out.push(
+          `<p><strong>${escapeHtml(label.trim())}:</strong> ${escapeHtml(rest.join(":").trim())}</p>`
+        );
+        continue;
       }
-      listItems.push(
-        seg
-          .replace(/^\(?\d+\)\s+/, "")
-          .replace(/^\d+[.)]\s+/, "")
-          .replace(/^\(?[a-zA-Z]\)\s+/, "")
-          .replace(/^(phase|step)\s+\d+:?\s*/i, "")
-          .trim()
-      );
-      continue;
-    }
 
-    if (isFieldLabel(seg)) {
+      // fallback paragraph
       flushList();
-      const [label, ...rest] = seg.split(":");
-      out.push(
-        `<p><strong>${escapeHtml(label.trim())}:</strong> ${escapeHtml(
-          rest.join(":").trim()
-        )}</p>`
-      );
-      continue;
+      addParagraph(seg);
     }
-
-    flushList();
-    addParagraph(seg);
   }
 
   flushList();
   return out.join("\n");
 }
 
-// Convert inline diff (plain or minimal HTML) to plain text for exports
+/* --------------------- diff/plaintext conversion --------------------- */
+
 function diffToPlainText(diff?: string | null): string {
   if (!diff) return "";
   if (/<\w+[^>]*>/.test(diff)) {
+    // remove tags conservatively
     return diff.replace(/<[^>]+>/g, "");
   }
   return diff
@@ -233,11 +247,6 @@ function diffToPlainText(diff?: string | null): string {
     .filter((l) => l.trim() !== "")
     .join("\n");
 }
-
-// removed duplicate escapeHtml (top-level escapeHtml is used)
-
-// (Removed duplicate escapeHtml; top-level escapeHtml is used everywhere)
-
 
 /* ----------------------------- Small UI Bits ----------------------------- */
 
@@ -376,8 +385,8 @@ const DocumentEditor: React.FC<{
       .split("\n\n")
       .map((para) => {
         const lines = para.split("\n").map((line) => {
-          if (line.startsWith("++ ")) return `<mark class=\"highlight-added\">${escapeHtml(line.substring(3))}</mark>`;
-          if (line.startsWith("-- ")) return `<mark class=\"highlight-removed\"><del>${escapeHtml(line.substring(3))}</del></mark>`;
+          if (line.startsWith("++ ")) return `<mark class="highlight-added">${escapeHtml(line.substring(3))}</mark>`;
+          if (line.startsWith("-- ")) return `<mark class="highlight-removed"><del>${escapeHtml(line.substring(3))}</del></mark>`;
           return escapeHtml(line);
         });
         return `<p>${lines.join("<br />")}</p>`;
@@ -405,10 +414,9 @@ const DocumentEditor: React.FC<{
     <div className="bg-white rounded-xl shadow-lg border border-gray-200 flex flex-col h-full">
       {markFlashStyle}
 
-      {/* Document title and controls - more compact */}
+      {/* Document title and controls */}
       <div className="p-3 flex items-center justify-between border-b bg-gray-50">
         <div className="flex items-center gap-3 flex-1 min-w-0">
-          {/* Back button integrated with document title */}
           <button
             onClick={onBack}
             className="flex items-center space-x-1 px-2 py-1 text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition flex-shrink-0"
@@ -419,7 +427,7 @@ const DocumentEditor: React.FC<{
             <span className="text-sm font-medium">Back</span>
           </button>
 
-          <div className="w-px h-6 bg-gray-300" /> {/* Separator */}
+          <div className="w-px h-6 bg-gray-300" />
 
           <input
             type="text"
@@ -467,18 +475,36 @@ const DocumentEditor: React.FC<{
           />
         ) : report.diffContent && showComparison ? (
           <div className="grid md:grid-cols-2 gap-6 h-full">
-            <div className="prose max-w-none">
+            <div>
               <h3 className="text-sm font-semibold text-gray-500 mb-2">Original</h3>
-              <div id="original-content" className="whitespace-pre-wrap" dangerouslySetInnerHTML={{ __html: getOriginalHtml }} />
+              <div id="original-content" className="border rounded-lg p-4 bg-white">
+                {/* Final rendering: justified + margins + readable typography */}
+                <div
+                  className="prose max-w-none dark:prose-invert text-justify leading-relaxed px-2"
+                  dangerouslySetInnerHTML={{ __html: getOriginalHtml }}
+                />
+              </div>
             </div>
 
-            <div className="prose max-w-none">
+            <div>
               <h3 className="text-sm font-semibold text-gray-500 mb-2">Enhanced</h3>
-              <div id="enhanced-content" className="whitespace-pre-wrap" dangerouslySetInnerHTML={{ __html: getEnhancedHtml }} />
+              <div id="enhanced-content" className="border rounded-lg p-4 bg-white">
+                <div
+                  className="prose max-w-none dark:prose-invert text-justify leading-relaxed px-2"
+                  dangerouslySetInnerHTML={{ __html: getEnhancedHtml }}
+                />
+              </div>
             </div>
           </div>
         ) : (
-          <div className="prose max-w-none h-full" dangerouslySetInnerHTML={{ __html: report.diffContent ? getEnhancedHtml : getOriginalHtml }} />
+          <div className="h-full">
+            <div className="border rounded-lg p-6 bg-white h-full">
+              <div
+                className="prose max-w-none dark:prose-invert text-justify leading-relaxed px-2"
+                dangerouslySetInnerHTML={{ __html: report.diffContent ? getEnhancedHtml : getOriginalHtml }}
+              />
+            </div>
+          </div>
         )}
       </div>
     </div>
