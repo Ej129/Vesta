@@ -238,6 +238,23 @@ function textToNeatHtml(input: string): string {
   return out.join("\n");
 }
 
+// Convert inline diff (plain or minimal HTML) to plain text for exports
+function diffToPlainText(diff?: string | null): string {
+  if (!diff) return "";
+  if (/<\w+[^>]*>/.test(diff)) {
+    return diff.replace(/<[^>]+>/g, "");
+  }
+  return diff
+    .split("\n")
+    .map((line) => {
+      if (line.startsWith("++ ")) return line.substring(3);
+      if (line.startsWith("-- ")) return ""; // drop removed lines
+      return line;
+    })
+    .filter((l) => l.trim() !== "")
+    .join("\n");
+}
+
 // (Removed duplicate escapeHtml; top-level escapeHtml is used everywhere)
 
 
