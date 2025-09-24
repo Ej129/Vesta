@@ -35,12 +35,12 @@ import {
 } from "../components/Icons";
 
 /* --------------------------------------------------------------------------
-  NOTES:
+  NOTES / USAGE
+  - For best appearance enable Tailwind Typography plugin:
+    npm i @tailwindcss/typography
+    and add to tailwind.config.js -> plugins: [require('@tailwindcss/typography')]
   - Keep docx & jspdf installed: npm i docx jspdf
-  - Single header with workspace title, metrics, and Auto-Enhance button
-  - Document content below with title edit and controls
-  - Analysis panel on the right
-  -------------------------------------------------------------------------- */
+----------------------------------------------------------------------------*/
 
 /* -------------------- Utilities & Sanitizer -------------------- */
 
@@ -52,10 +52,9 @@ const escapeHtml = (unsafe: string) =>
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
 
-const escapeRegExp = (text: string) =>
-  text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-// Conservative whitelist sanitizer for minimal HTML used by diffs
+// Conservative whitelist sanitizer for small HTML fragments (used for diffs)
 function sanitizeHtmlAllowlist(html: string) {
   let sanitized = html.replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, "");
   sanitized = sanitized.replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, "");
@@ -75,6 +74,10 @@ function sanitizeHtmlAllowlist(html: string) {
     "li",
     "span",
     "div",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
   ];
 
   sanitized = sanitized.replace(/<\/?([a-zA-Z0-9-]+)(\s[^>]*)?>/g, (match, tag, attrs) => {
@@ -97,6 +100,7 @@ function injectSnippetIdsIntoHtml(html: string, findings: Finding[] = []) {
     if (!snippet) continue;
     try {
       const escapedSnippet = escapeHtml(snippet);
+      // match either escaped or plain snippet (case-insensitive)
       const re = new RegExp(escapeRegExp(escapedSnippet), "i");
       if (re.test(out)) {
         out = out.replace(re, `<span id="snippet-${f.id}" class="snippet-target">${escapedSnippet}</span>`);
@@ -113,16 +117,131 @@ function injectSnippetIdsIntoHtml(html: string, findings: Finding[] = []) {
   return out;
 }
 
-function diffToPlainText(diff?: string | null) {
+/* ---------------- Improved text => neat HTML converter ------------------ */
+/* Generic, robust formatter for proposals, budgets, timelines, etc.        */
+function textToNeatHtml(input: string): string {
+  if (!input) return "";
+
+  const normalized = input.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+
+  // Aggressive segmentation: split on double-newlines (paragraphs) OR sentence breaks
+  const segments = normalized
+    .split(/(?<=\.)\s+(?=[A-Z])|[\n]{2,}/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const out: string[] = [];
+
+  // --- Detection helpers ---
+  const isHeading = (s: string) =>
+    /^(executive summary|summary|introduction|scope|background|conclusion|findings|analysis|recommendations|budget|project timeline|timeline|methodology|objectives|deliverables)[:]?$/i.test(
+      s
+    ) ||
+    (/^[A-Z0-9\s\-&]{3,}$/.test(s) && s.length < 80); // ALL CAPS short lines
+
+  const isBullet = (s: string) => /^[-•\u2022\*]\s+/.test(s);
+  const isOrdered = (s: string) =>
+    /^\(?\d+\)|^\d+[.)]\s+/.test(s) ||
+    /^\(?[a-zA-Z]\)\s+/.test(s) ||
+    /^(phase|step)\s+\d+/i.test(s);
+
+  // label: value lines like "Project Title: SecurePay PH" (not headings)
+  const isFieldLabel = (s: string) =>
+    /^[A-Z][\w\s().,-]{0,80}:\s+.+/.test(s) && !isHeading(s);
+
+  // --- Utilities & state ---
+  let listMode: null | "ul" | "ol" = null;
+  let listItems: string[] = [];
+
+  const flushList = () => {
+    if (!listMode || listItems.length === 0) return;
+    const items = listItems.map((x) => `<li>${escapeHtml(x)}</li>`).join("");
+    out.push(`<${listMode}>${items}</${listMode}>`);
+    listMode = null;
+    listItems = [];
+  };
+
+  const addParagraph = (s: string) => out.push(`<p>${escapeHtml(s)}</p>`);
+
+  // If original text had single-line blocks with many "Label: Value Label2: Value2", try splitting those into labeled paragraphs
+  const trySplitInlineLabels = (s: string) => {
+    // find sequences like "Label1: value1 Label2: value2"
+    const parts = s.split(/(?<=\w:\s[^:]+)\s(?=[A-Z][\w\s()\-]{1,20}:)/g);
+    if (parts.length > 1) return parts.map((p) => p.trim()).filter(Boolean);
+    return [s];
+  };
+
+  // --- Main loop ---
+  for (const segRaw of segments) {
+    // try splitting inline labels first (e.g., "Budget: X Total: Y")
+    const subSegments = trySplitInlineLabels(segRaw);
+
+    for (const seg of subSegments) {
+      if (!seg) continue;
+
+      if (isHeading(seg)) {
+        flushList();
+        out.push(`<h3>${escapeHtml(seg.replace(/:$/, ""))}</h3>`);
+        continue;
+      }
+
+      if (isBullet(seg)) {
+        if (listMode !== "ul") {
+          flushList();
+          listMode = "ul";
+        }
+        listItems.push(seg.replace(/^[-•\u2022\*]\s+/, "").trim());
+        continue;
+      }
+
+      if (isOrdered(seg)) {
+        if (listMode !== "ol") {
+          flushList();
+          listMode = "ol";
+        }
+        listItems.push(
+          seg
+            .replace(/^\(?\d+\)\s+/, "")
+            .replace(/^\d+[.)]\s+/, "")
+            .replace(/^\(?[a-zA-Z]\)\s+/, "")
+            .replace(/^(phase|step)\s+\d+:?\s*/i, "")
+            .trim()
+        );
+        continue;
+      }
+
+      if (isFieldLabel(seg)) {
+        flushList();
+        const [label, ...rest] = seg.split(":");
+        out.push(
+          `<p><strong>${escapeHtml(label.trim())}:</strong> ${escapeHtml(rest.join(":").trim())}</p>`
+        );
+        continue;
+      }
+
+      // fallback paragraph
+      flushList();
+      addParagraph(seg);
+    }
+  }
+
+  flushList();
+  return out.join("\n");
+}
+
+/* --------------------- diff/plaintext conversion --------------------- */
+
+function diffToPlainText(diff?: string | null): string {
   if (!diff) return "";
   if (/<\w+[^>]*>/.test(diff)) {
-    return diff.replace(/<\/?[^>]+(>|$)/g, "");
+    // remove tags conservatively
+    return diff.replace(/<[^>]+>/g, "");
   }
   return diff
     .split("\n")
     .map((line) => {
       if (line.startsWith("++ ")) return line.substring(3);
-      if (line.startsWith("-- ")) return "";
+      if (line.startsWith("-- ")) return ""; // drop removed lines
       return line;
     })
     .filter((l) => l.trim() !== "")
@@ -222,6 +341,7 @@ const DocumentEditor: React.FC<{
   report: AnalysisReport;
   isEditing: boolean;
   onContentChange: (content: string) => void;
+  onTitleChange: (title: string) => void;
   onSaveChanges: () => void;
   onToggleEdit: () => void;
   onDownloadPdf: () => void;
@@ -229,11 +349,12 @@ const DocumentEditor: React.FC<{
   onDownloadDocx: () => void;
   hoveredFindingId: string | null;
   selectedFindingId: string | null;
-  onBack: () => void; // Added this prop
+  onBack: () => void;
 }> = ({
   report,
   isEditing,
   onContentChange,
+  onTitleChange,
   onSaveChanges,
   onToggleEdit,
   onDownloadPdf,
@@ -241,14 +362,14 @@ const DocumentEditor: React.FC<{
   onDownloadDocx,
   hoveredFindingId,
   selectedFindingId,
-  onBack, // Added this parameter
+  onBack,
 }) => {
   const [showComparison, setShowComparison] = useState(true);
 
   const getOriginalHtml = useMemo(() => {
     const raw = report?.documentContent ?? "";
-    const escaped = escapeHtml(raw).replace(/\n/g, "<br />");
-    return injectSnippetIdsIntoHtml(escaped, report?.findings ?? []);
+    const neat = textToNeatHtml(raw);
+    return injectSnippetIdsIntoHtml(neat, report?.findings ?? []);
   }, [report]);
 
   const getEnhancedHtml = useMemo(() => {
@@ -261,13 +382,16 @@ const DocumentEditor: React.FC<{
       return injectSnippetIdsIntoHtml(sanitized, report?.findings ?? []);
     }
     const html = diff
-      .split("\n")
-      .map((line) => {
-        if (line.startsWith("++ ")) return `<mark class="highlight-added">${escapeHtml(line.substring(3))}</mark>`;
-        if (line.startsWith("-- ")) return `<mark class="highlight-removed"><del>${escapeHtml(line.substring(3))}</del></mark>`;
-        return escapeHtml(line);
+      .split("\n\n")
+      .map((para) => {
+        const lines = para.split("\n").map((line) => {
+          if (line.startsWith("++ ")) return `<mark class="highlight-added">${escapeHtml(line.substring(3))}</mark>`;
+          if (line.startsWith("-- ")) return `<mark class="highlight-removed"><del>${escapeHtml(line.substring(3))}</del></mark>`;
+          return escapeHtml(line);
+        });
+        return `<p>${lines.join("<br />")}</p>`;
       })
-      .join("<br />");
+      .join("");
     return injectSnippetIdsIntoHtml(html, report?.findings ?? []);
   }, [report, getOriginalHtml]);
 
@@ -280,7 +404,9 @@ const DocumentEditor: React.FC<{
           100% { box-shadow: none; }
         }
         .snippet-target { padding: 0 2px; border-radius: 2px; }
-      `
+        .highlight-added { background: #ecfee8; color: #0b6312; padding: 0 2px; border-radius: 2px; }
+        .highlight-removed { background: #ffecec; color: #8a1111; padding: 0 2px; border-radius: 2px; text-decoration: line-through; }
+      `,
     }} />
   );
 
@@ -288,10 +414,9 @@ const DocumentEditor: React.FC<{
     <div className="bg-white rounded-xl shadow-lg border border-gray-200 flex flex-col h-full">
       {markFlashStyle}
 
-      {/* Document title and controls - more compact */}
+      {/* Document title and controls */}
       <div className="p-3 flex items-center justify-between border-b bg-gray-50">
         <div className="flex items-center gap-3 flex-1 min-w-0">
-          {/* Back button integrated with document title */}
           <button
             onClick={onBack}
             className="flex items-center space-x-1 px-2 py-1 text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition flex-shrink-0"
@@ -301,13 +426,13 @@ const DocumentEditor: React.FC<{
             <ArrowLeftIcon className="w-4 h-4" />
             <span className="text-sm font-medium">Back</span>
           </button>
-          
-          <div className="w-px h-6 bg-gray-300"></div> {/* Separator */}
-          
+
+          <div className="w-px h-6 bg-gray-300" />
+
           <input
             type="text"
             value={report.title ?? ""}
-            onChange={(e) => onContentChange && report && onContentChange(report.documentContent)}
+            onChange={(e) => onTitleChange && onTitleChange(e.target.value)}
             className="text-lg font-bold text-gray-900 bg-transparent border-none focus:outline-none focus:ring-0 flex-1 min-w-0"
             placeholder="Document Title"
             aria-label="Edit document title"
@@ -343,25 +468,43 @@ const DocumentEditor: React.FC<{
         {isEditing ? (
           <textarea
             value={report.documentContent}
-            onChange={(e) => onContentChange(e.target.value)}
+            onChange={(e) => onContentChange && onContentChange(e.target.value)}
             className="w-full h-full bg-transparent focus:outline-none resize-none text-base leading-relaxed font-sans"
             aria-label="Edit document content"
             autoFocus
           />
         ) : report.diffContent && showComparison ? (
           <div className="grid md:grid-cols-2 gap-6 h-full">
-            <div className="prose max-w-none">
+            <div>
               <h3 className="text-sm font-semibold text-gray-500 mb-2">Original</h3>
-              <div id="original-content" className="whitespace-pre-wrap" dangerouslySetInnerHTML={{ __html: getOriginalHtml }} />
+              <div id="original-content" className="border rounded-lg p-4 bg-white">
+                {/* Final rendering: justified + margins + readable typography */}
+                <div
+                  className="prose max-w-none dark:prose-invert text-justify leading-relaxed px-2"
+                  dangerouslySetInnerHTML={{ __html: getOriginalHtml }}
+                />
+              </div>
             </div>
 
-            <div className="prose max-w-none">
+            <div>
               <h3 className="text-sm font-semibold text-gray-500 mb-2">Enhanced</h3>
-              <div id="enhanced-content" className="whitespace-pre-wrap" dangerouslySetInnerHTML={{ __html: getEnhancedHtml }} />
+              <div id="enhanced-content" className="border rounded-lg p-4 bg-white">
+                <div
+                  className="prose max-w-none dark:prose-invert text-justify leading-relaxed px-2"
+                  dangerouslySetInnerHTML={{ __html: getEnhancedHtml }}
+                />
+              </div>
             </div>
           </div>
         ) : (
-          <div className="prose max-w-none h-full" dangerouslySetInnerHTML={{ __html: report.diffContent ? getEnhancedHtml : getOriginalHtml }} />
+          <div className="h-full">
+            <div className="border rounded-lg p-6 bg-white h-full">
+              <div
+                className="prose max-w-none dark:prose-invert text-justify leading-relaxed px-2"
+                dangerouslySetInnerHTML={{ __html: report.diffContent ? getEnhancedHtml : getOriginalHtml }}
+              />
+            </div>
+          </div>
         )}
       </div>
     </div>
@@ -637,14 +780,14 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
       doc.setFont("helvetica", "normal");
       doc.setFontSize(11);
 
-      const pageHeight = doc.internal.pageSize.height || 297;
+      const pageHeight = (doc.internal.pageSize.height as number) || 297;
       const margin = 15;
       let y = 30;
-      const lines = doc.splitTextToSize(content, doc.internal.pageSize.width - margin * 2);
+      const lines = doc.splitTextToSize(content, (doc.internal.pageSize.width as number) - margin * 2);
       lines.forEach((line) => {
         if (y + 10 > pageHeight - margin) {
           doc.addPage();
-          y = margin;
+          y = margin + 10;
         }
         doc.text(line, margin, y);
         y += 7;
@@ -718,7 +861,7 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
   };
 
   // Helper: saveReportTitle -> updates local state and calls onUpdateReport
-  async function saveReportTitle(reportId?: string, newTitle?: string) {
+  async function saveReportTitle(newTitle?: string) {
     if (!currentReport) return;
     try {
       const updatedReport = { ...currentReport, title: newTitle ?? currentReport.title };
@@ -753,9 +896,7 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
           <div className="flex items-center justify-between gap-6">
             {/* Left: Workspace title */}
             <div className="min-w-0">
-              <h1 className="text-xl font-bold text-gray-900 truncate">
-                {currentWorkspace?.name || "WORKSPACE TITLE"}
-              </h1>
+              <h1 className="text-xl font-bold text-gray-900 truncate">{currentWorkspace?.name || "WORKSPACE TITLE"}</h1>
             </div>
 
             {/* Center: Metrics */}
@@ -820,6 +961,7 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
             report={currentReport}
             isEditing={isEditing}
             onContentChange={(content) => setCurrentReport({ ...currentReport, documentContent: content })}
+            onTitleChange={(title) => saveReportTitle(title)}
             onSaveChanges={handleSaveChanges}
             onToggleEdit={() => setIsEditing((s) => !s)}
             onDownloadPdf={handleDownloadPdf}
