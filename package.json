@@ -15,6 +15,7 @@
     "@google/generative-ai": "^0.24.1",
     "@netlify/blobs": "^7.0.0",
     "@netlify/functions": "^2.7.0",
+    "@tailwindcss/typography": "^0.5.18",
     "diff": "^8.0.2",
     "docx": "^9.5.1",
     "jspdf": "^3.0.1",
