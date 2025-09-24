@@ -122,21 +122,43 @@ function injectSnippetIdsIntoHtml(html: string, findings: Finding[] = []) {
 // Convert plain text into basic HTML paragraphs and line breaks for better readability
 function textToNeatHtml(input: string): string {
   if (!input) return "";
+
   const normalized = input.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-  const lines = normalized.split(/\n/).map((l) => l.replace(/\t/g, "    ").replace(/[ ]{2,}/g, " ").replace(/^\s+|\s+$/g, ""));
+  const lines = normalized
+    .split(/\n/)
+    .map((l) =>
+      l
+        .replace(/\t/g, "    ")
+        .replace(/[ ]{2,}/g, " ")
+        .replace(/^\s+|\s+$/g, "")
+    );
 
   const isEmpty = (s: string) => s.trim().length === 0;
+
   const isHeading = (s: string) => {
     if (s.length === 0) return false;
-    // common section headings and legal/regulation style
-    if (/^(executive summary|summary|introduction|scope|background|conclusion|findings|analysis|recommendations)[:\s\-—]/i.test(s)) return true;
+    if (
+      /^(executive summary|summary|introduction|scope|background|conclusion|findings|analysis|recommendations|budget|project timeline)[:\s\-—]/i.test(
+        s
+      )
+    )
+      return true;
     if (/^(section|article|annex|appendix)\s+\w+/i.test(s)) return true;
-    if (s.length <= 80 && /[:—-]$/.test(s)) return true; // trailing colon or dash
-    if (s.length <= 60 && /^[A-Z0-9][A-Za-z0-9()\-\s]+$/.test(s) && !/[.!?]$/.test(s)) return true;
+    if (s.length <= 80 && /[:—-]$/.test(s)) return true;
+    if (
+      s.length <= 60 &&
+      /^[A-Z0-9][A-Za-z0-9()\-\s]+$/.test(s) &&
+      !/[.!?]$/.test(s)
+    )
+      return true;
     return false;
   };
+
   const isBullet = (s: string) => /^[-•\u2022\*]\s+/.test(s);
-  const isOrdered = (s: string) => /^\(?\d+\)|^\d+[.)]\s+/.test(s) || /^\(?[a-zA-Z]\)/.test(s) || /^(phase\s+\d+)/i.test(s);
+  const isOrdered = (s: string) =>
+    /^\(?\d+\)|^\d+[.)]\s+/.test(s) ||
+    /^\(?[a-zA-Z]\)/.test(s) ||
+    /^(phase\s+\d+)/i.test(s);
 
   const flushParagraph = (buf: string[]): string => {
     if (buf.length === 0) return "";
@@ -151,7 +173,9 @@ function textToNeatHtml(input: string): string {
 
   const flushList = () => {
     if (!listMode || listItems.length === 0) return;
-    const items = listItems.map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+    const items = listItems
+      .map((item) => `<li>${escapeHtml(item)}</li>`)
+      .join("");
     out.push(`<${listMode}>${items}</${listMode}>`);
     listMode = null;
     listItems = [];
@@ -166,14 +190,22 @@ function textToNeatHtml(input: string): string {
       continue;
     }
 
+    // handle bullets and ordered lists
     if (isBullet(line) || isOrdered(line)) {
       if (pbuf.length) out.push(flushParagraph(pbuf)), (pbuf = []);
       const isOrderedNow = isOrdered(line);
-      let content = line.replace(/^[-•\u2022\*]\s+/, "").replace(/^\(?\d+\)\s+/, "").replace(/^\d+[.)]\s+/, "").replace(/^\(?[a-zA-Z]\)\s+/, "").replace(/^phase\s+\d+:?\s*/i, "").trim();
+      let content = line
+        .replace(/^[-•\u2022\*]\s+/, "")
+        .replace(/^\(?\d+\)\s+/, "")
+        .replace(/^\d+[.)]\s+/, "")
+        .replace(/^\(?[a-zA-Z]\)\s+/, "")
+        .replace(/^phase\s+\d+:?\s*/i, "")
+        .trim();
       const desiredMode: "ul" | "ol" = isOrderedNow ? "ol" : "ul";
       if (listMode && listMode !== desiredMode) flushList();
       listMode = desiredMode;
       listItems.push(content);
+
       const next = lines[i + 1] ?? "";
       if (!(isBullet(next) || isOrdered(next))) {
         flushList();
@@ -181,13 +213,17 @@ function textToNeatHtml(input: string): string {
       continue;
     }
 
+    // handle headings
     if (isHeading(line)) {
       flushList();
       if (pbuf.length) out.push(flushParagraph(pbuf)), (pbuf = []);
-      out.push(`<h3>${escapeHtml(line.replace(/[:—-]+$/, "").trim())}</h3>`);
+      out.push(
+        `<h3>${escapeHtml(line.replace(/[:—-]+$/, "").trim())}</h3>`
+      );
       continue;
     }
 
+    // smart paragraph splitting
     const prev = pbuf[pbuf.length - 1] || "";
     if (prev && /[.!?)]$/.test(prev) && /^[A-Z(]/.test(line)) {
       out.push(flushParagraph(pbuf));
@@ -202,21 +238,8 @@ function textToNeatHtml(input: string): string {
   return out.join("\n");
 }
 
-function diffToPlainText(diff?: string | null) {
-  if (!diff) return "";
-  if (/<\w+[^>]*>/.test(diff)) {
-    return diff.replace(/<[^>]+>/g, "");
-  }
-  return diff
-    .split("\n")
-    .map((line) => {
-      if (line.startsWith("++ ")) return line.substring(3);
-      if (line.startsWith("-- ")) return "";
-      return line;
-    })
-    .filter((l) => l.trim() !== "")
-    .join("\n");
-}
+// (Removed duplicate escapeHtml; top-level escapeHtml is used everywhere)
+
 
 /* ----------------------------- Small UI Bits ----------------------------- */
 
