@@ -124,117 +124,96 @@ function textToNeatHtml(input: string): string {
   if (!input) return "";
 
   const normalized = input.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-  const lines = normalized
-    .split(/\n/)
-    .map((l) =>
-      l
-        .replace(/\t/g, "    ")
-        .replace(/[ ]{2,}/g, " ")
-        .replace(/^\s+|\s+$/g, "")
-    );
 
-  const isEmpty = (s: string) => s.trim().length === 0;
+  // Split on newlines OR after sentence breaks (period + space + capital)
+  const segments = normalized
+    .split(/(?<=\.)\s+(?=[A-Z])|[\n]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
 
-  const isHeading = (s: string) => {
-    if (s.length === 0) return false;
-    if (
-      /^(executive summary|summary|introduction|scope|background|conclusion|findings|analysis|recommendations|budget|project timeline)[:\s\-—]/i.test(
-        s
-      )
-    )
-      return true;
-    if (/^(section|article|annex|appendix)\s+\w+/i.test(s)) return true;
-    if (s.length <= 80 && /[:—-]$/.test(s)) return true;
-    if (
-      s.length <= 60 &&
-      /^[A-Z0-9][A-Za-z0-9()\-\s]+$/.test(s) &&
-      !/[.!?]$/.test(s)
-    )
-      return true;
-    return false;
-  };
+  const out: string[] = [];
+
+  // --- Detection helpers ---
+  const isHeading = (s: string) =>
+    /^(executive summary|summary|introduction|scope|background|conclusion|findings|analysis|recommendations|budget|project timeline|methodology|objectives)[:]?$/i.test(
+      s
+    ) ||
+    (/^[A-Z0-9\s\-&]{3,}$/.test(s) && s.length < 80); // ALL CAPS short lines
 
   const isBullet = (s: string) => /^[-•\u2022\*]\s+/.test(s);
   const isOrdered = (s: string) =>
     /^\(?\d+\)|^\d+[.)]\s+/.test(s) ||
-    /^\(?[a-zA-Z]\)/.test(s) ||
-    /^(phase\s+\d+)/i.test(s);
+    /^\(?[a-zA-Z]\)\s+/.test(s) ||
+    /^(phase|step)\s+\d+/i.test(s);
 
-  const flushParagraph = (buf: string[]): string => {
-    if (buf.length === 0) return "";
-    const html = escapeHtml(buf.join(" ")).replace(/\s{2,}/g, " ");
-    return `<p>${html}</p>`;
-  };
+  const isFieldLabel = (s: string) =>
+    /^[A-Z][\w\s()]+:\s+.+/.test(s) && !isHeading(s);
 
-  const out: string[] = [];
-  let pbuf: string[] = [];
-  let listMode: null | "ul" | "ol" = null;
-  let listItems: string[] = [];
-
+  // --- Utilities ---
   const flushList = () => {
     if (!listMode || listItems.length === 0) return;
-    const items = listItems
-      .map((item) => `<li>${escapeHtml(item)}</li>`)
-      .join("");
+    const items = listItems.map((x) => `<li>${escapeHtml(x)}</li>`).join("");
     out.push(`<${listMode}>${items}</${listMode}>`);
     listMode = null;
     listItems = [];
   };
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+  const addParagraph = (s: string) =>
+    out.push(`<p>${escapeHtml(s)}</p>`);
 
-    if (isEmpty(line)) {
+  // --- State ---
+  let listMode: null | "ul" | "ol" = null;
+  let listItems: string[] = [];
+
+  // --- Main loop ---
+  for (const seg of segments) {
+    if (isHeading(seg)) {
       flushList();
-      if (pbuf.length) out.push(flushParagraph(pbuf)), (pbuf = []);
+      out.push(`<h3>${escapeHtml(seg.replace(/:$/, ""))}</h3>`);
       continue;
     }
 
-    // handle bullets and ordered lists
-    if (isBullet(line) || isOrdered(line)) {
-      if (pbuf.length) out.push(flushParagraph(pbuf)), (pbuf = []);
-      const isOrderedNow = isOrdered(line);
-      let content = line
-        .replace(/^[-•\u2022\*]\s+/, "")
-        .replace(/^\(?\d+\)\s+/, "")
-        .replace(/^\d+[.)]\s+/, "")
-        .replace(/^\(?[a-zA-Z]\)\s+/, "")
-        .replace(/^phase\s+\d+:?\s*/i, "")
-        .trim();
-      const desiredMode: "ul" | "ol" = isOrderedNow ? "ol" : "ul";
-      if (listMode && listMode !== desiredMode) flushList();
-      listMode = desiredMode;
-      listItems.push(content);
-
-      const next = lines[i + 1] ?? "";
-      if (!(isBullet(next) || isOrdered(next))) {
+    if (isBullet(seg)) {
+      if (listMode !== "ul") {
         flushList();
+        listMode = "ul";
       }
+      listItems.push(seg.replace(/^[-•\u2022\*]\s+/, "").trim());
       continue;
     }
 
-    // handle headings
-    if (isHeading(line)) {
-      flushList();
-      if (pbuf.length) out.push(flushParagraph(pbuf)), (pbuf = []);
-      out.push(
-        `<h3>${escapeHtml(line.replace(/[:—-]+$/, "").trim())}</h3>`
+    if (isOrdered(seg)) {
+      if (listMode !== "ol") {
+        flushList();
+        listMode = "ol";
+      }
+      listItems.push(
+        seg
+          .replace(/^\(?\d+\)\s+/, "")
+          .replace(/^\d+[.)]\s+/, "")
+          .replace(/^\(?[a-zA-Z]\)\s+/, "")
+          .replace(/^(phase|step)\s+\d+:?\s*/i, "")
+          .trim()
       );
       continue;
     }
 
-    // smart paragraph splitting
-    const prev = pbuf[pbuf.length - 1] || "";
-    if (prev && /[.!?)]$/.test(prev) && /^[A-Z(]/.test(line)) {
-      out.push(flushParagraph(pbuf));
-      pbuf = [line];
-    } else {
-      pbuf.push(line);
+    if (isFieldLabel(seg)) {
+      flushList();
+      const [label, ...rest] = seg.split(":");
+      out.push(
+        `<p><strong>${escapeHtml(label.trim())}:</strong> ${escapeHtml(
+          rest.join(":").trim()
+        )}</p>`
+      );
+      continue;
     }
+
+    flushList();
+    addParagraph(seg);
   }
 
   flushList();
-  if (pbuf.length) out.push(flushParagraph(pbuf));
   return out.join("\n");
 }
 
@@ -254,6 +233,8 @@ function diffToPlainText(diff?: string | null): string {
     .filter((l) => l.trim() !== "")
     .join("\n");
 }
+
+// removed duplicate escapeHtml (top-level escapeHtml is used)
 
 // (Removed duplicate escapeHtml; top-level escapeHtml is used everywhere)
 
