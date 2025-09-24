@@ -66,7 +66,7 @@ const extractTextFromFile = async (file: File): Promise<string> => {
           typeof item.str === "string" ? item.str : item.unicode ?? ""
         )
         .join(" ");
-      text += pageText + "\n\n"; // keep spacing between pages
+      text += pageText + "\n\n"; // spacing between pages
     }
 
     // Heuristic: check if scanned (garbled text)
@@ -145,7 +145,7 @@ const UploadModal: React.FC<UploadModalProps> = ({
       onClick={onClose}
     >
       <div
-        className="bg-white dark:bg-neutral-900 rounded-lg shadow-xl p-6 w-full max-w-md relative"
+        className="bg-white dark:bg-neutral-900 rounded-lg shadow-xl p-6 w-full max-w-2xl relative"
         onClick={(e) => e.stopPropagation()}
       >
         {isAnalyzing ? (
@@ -169,12 +169,22 @@ const UploadModal: React.FC<UploadModalProps> = ({
                 className="block w-full text-sm text-gray-700 dark:text-neutral-300 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-red-700 file:text-white hover:file:bg-red-800"
               />
             </div>
+
             {error && (
               <p className="text-sm text-red-600 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-900 rounded-md p-2 mb-3">
                 {error}
               </p>
             )}
-            <div className="flex justify-between gap-3">
+
+            {fileContent && (
+              <div className="mt-4 max-h-64 overflow-y-auto border border-gray-200 dark:border-neutral-700 rounded-lg bg-gray-50 dark:bg-neutral-800/50 p-6">
+                <div className="whitespace-pre-wrap text-justify leading-relaxed text-gray-800 dark:text-neutral-200 px-4">
+                  {fileContent}
+                </div>
+              </div>
+            )}
+
+            <div className="flex justify-between gap-3 mt-4">
               <button
                 onClick={onClose}
                 className="px-4 py-2 rounded-md border border-gray-300 dark:border-neutral-600 bg-white/80 backdrop-blur text-gray-700 dark:text-neutral-200 hover:bg-white dark:hover:bg-neutral-700 transition shadow-sm"
