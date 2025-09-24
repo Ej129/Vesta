@@ -35,11 +35,13 @@ import {
 } from "../components/Icons";
 
 /* --------------------------------------------------------------------------
-  NOTES:
+  NOTES / USAGE
+  - This file is an updated, cleaned-up rewrite of the AnalysisScreen.
+  - For best appearance, enable Tailwind Typography plugin:
+      npm i @tailwindcss/typography
+    and add to tailwind.config.js -> plugins: [require('@tailwindcss/typography')]
+
   - Keep docx & jspdf installed: npm i docx jspdf
-  - Single header with workspace title, metrics, and Auto-Enhance button
-  - Document content below with title edit and controls
-  - Analysis panel on the right
   -------------------------------------------------------------------------- */
 
 /* -------------------- Utilities & Sanitizer -------------------- */
@@ -52,10 +54,9 @@ const escapeHtml = (unsafe: string) =>
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
 
-const escapeRegExp = (text: string) =>
-  text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&");
 
-// Conservative whitelist sanitizer for minimal HTML used by diffs
+// Conservative whitelist sanitizer for small HTML fragments (used for diffs)
 function sanitizeHtmlAllowlist(html: string) {
   let sanitized = html.replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, "");
   sanitized = sanitized.replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, "");
@@ -75,6 +76,10 @@ function sanitizeHtmlAllowlist(html: string) {
     "li",
     "span",
     "div",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
   ];
 
   sanitized = sanitized.replace(/<\/?([a-zA-Z0-9-]+)(\s[^>]*)?>/g, (match, tag, attrs) => {
@@ -97,6 +102,7 @@ function injectSnippetIdsIntoHtml(html: string, findings: Finding[] = []) {
     if (!snippet) continue;
     try {
       const escapedSnippet = escapeHtml(snippet);
+      // match either escaped or plain snippet (case-insensitive)
       const re = new RegExp(escapeRegExp(escapedSnippet), "i");
       if (re.test(out)) {
         out = out.replace(re, `<span id="snippet-${f.id}" class="snippet-target">${escapedSnippet}</span>`);
@@ -117,18 +123,20 @@ function injectSnippetIdsIntoHtml(html: string, findings: Finding[] = []) {
 function textToNeatHtml(input: string): string {
   if (!input) return "";
   const normalized = input.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-  const lines = normalized.split(/\n/).map((l) => l.trimEnd());
+  const lines = normalized.split(/\n/).map((l) => l.replace(/\t/g, "    ").replace(/[ ]{2,}/g, " ").replace(/^\s+|\s+$/g, ""));
 
   const isEmpty = (s: string) => s.trim().length === 0;
   const isHeading = (s: string) => {
     if (s.length === 0) return false;
-    if (/^\s*(project|executive|summary|budget|timeline|scope|introduction|overview)[:]/i.test(s)) return true;
-    if (s.length <= 60 && /[:—-]$/.test(s)) return true;
-    if (s.length <= 60 && /^[A-Z][A-Za-z0-9()\-\s]+$/.test(s) && !/[.!?]$/.test(s)) return true;
+    // common section headings and legal/regulation style
+    if (/^(executive summary|summary|introduction|scope|background|conclusion|findings|analysis|recommendations)[:\s\-—]/i.test(s)) return true;
+    if (/^(section|article|annex|appendix)\s+\w+/i.test(s)) return true;
+    if (s.length <= 80 && /[:—-]$/.test(s)) return true; // trailing colon or dash
+    if (s.length <= 60 && /^[A-Z0-9][A-Za-z0-9()\-\s]+$/.test(s) && !/[.!?]$/.test(s)) return true;
     return false;
   };
-  const isBullet = (s: string) => /^[-•\u2022]\s+/.test(s);
-  const isOrdered = (s: string) => /^(\(?\d+\)|\d+[.)])\s+/.test(s) || /^(Phase\s+\d+)/i.test(s);
+  const isBullet = (s: string) => /^[-•\u2022\*]\s+/.test(s);
+  const isOrdered = (s: string) => /^\(?\d+\)|^\d+[.)]\s+/.test(s) || /^\(?[a-zA-Z]\)/.test(s) || /^(phase\s+\d+)/i.test(s);
 
   const flushParagraph = (buf: string[]): string => {
     if (buf.length === 0) return "";
@@ -138,14 +146,12 @@ function textToNeatHtml(input: string): string {
 
   const out: string[] = [];
   let pbuf: string[] = [];
-  let listMode: null | 'ul' | 'ol' = null;
+  let listMode: null | "ul" | "ol" = null;
   let listItems: string[] = [];
 
   const flushList = () => {
     if (!listMode || listItems.length === 0) return;
-    const items = listItems
-      .map((item) => `<li>${escapeHtml(item)}</li>`) // items are plain text
-      .join("");
+    const items = listItems.map((item) => `<li>${escapeHtml(item)}</li>`).join("");
     out.push(`<${listMode}>${items}</${listMode}>`);
     listMode = null;
     listItems = [];
@@ -163,35 +169,26 @@ function textToNeatHtml(input: string): string {
     if (isBullet(line) || isOrdered(line)) {
       if (pbuf.length) out.push(flushParagraph(pbuf)), (pbuf = []);
       const isOrderedNow = isOrdered(line);
-      // Strip common list markers using simple, safe expressions
-      let content = line
-        .replace(/^[-\u2022•]\s+/, "")
-        .replace(/^\(?\d+\)\s+/, "")
-        .replace(/^\d+[.)]\s+/, "")
-        .replace(/^Phase\s+\d+\s*:?\s*/i, "")
-        .trim();
-      const desiredMode: 'ul' | 'ol' = isOrderedNow ? 'ol' : 'ul';
+      let content = line.replace(/^[-•\u2022\*]\s+/, "").replace(/^\(?\d+\)\s+/, "").replace(/^\d+[.)]\s+/, "").replace(/^\(?[a-zA-Z]\)\s+/, "").replace(/^phase\s+\d+:?\s*/i, "").trim();
+      const desiredMode: "ul" | "ol" = isOrderedNow ? "ol" : "ul";
       if (listMode && listMode !== desiredMode) flushList();
       listMode = desiredMode;
       listItems.push(content);
-      // If next line is not list, we will flush at transition
-      const next = lines[i + 1] ?? '';
+      const next = lines[i + 1] ?? "";
       if (!(isBullet(next) || isOrdered(next))) {
         flushList();
       }
       continue;
     }
 
-    // headings
     if (isHeading(line)) {
       flushList();
       if (pbuf.length) out.push(flushParagraph(pbuf)), (pbuf = []);
-      out.push(`<h3>${escapeHtml(line.replace(/[:—-]+$/,'').trim())}</h3>`);
+      out.push(`<h3>${escapeHtml(line.replace(/[:—-]+$/, "").trim())}</h3>`);
       continue;
     }
 
-    // paragraph heuristics: if previous paragraph line ends with period and this starts with capital, break
-    const prev = pbuf[pbuf.length - 1] || '';
+    const prev = pbuf[pbuf.length - 1] || "";
     if (prev && /[.!?)]$/.test(prev) && /^[A-Z(]/.test(line)) {
       out.push(flushParagraph(pbuf));
       pbuf = [line];
@@ -208,7 +205,7 @@ function textToNeatHtml(input: string): string {
 function diffToPlainText(diff?: string | null) {
   if (!diff) return "";
   if (/<\w+[^>]*>/.test(diff)) {
-    return diff.replace(/<\/?[^>]+(>|$)/g, "");
+    return diff.replace(/<[^>]+>/g, "");
   }
   return diff
     .split("\n")
@@ -314,6 +311,7 @@ const DocumentEditor: React.FC<{
   report: AnalysisReport;
   isEditing: boolean;
   onContentChange: (content: string) => void;
+  onTitleChange: (title: string) => void;
   onSaveChanges: () => void;
   onToggleEdit: () => void;
   onDownloadPdf: () => void;
@@ -321,11 +319,12 @@ const DocumentEditor: React.FC<{
   onDownloadDocx: () => void;
   hoveredFindingId: string | null;
   selectedFindingId: string | null;
-  onBack: () => void; // Added this prop
+  onBack: () => void;
 }> = ({
   report,
   isEditing,
   onContentChange,
+  onTitleChange,
   onSaveChanges,
   onToggleEdit,
   onDownloadPdf,
@@ -333,7 +332,7 @@ const DocumentEditor: React.FC<{
   onDownloadDocx,
   hoveredFindingId,
   selectedFindingId,
-  onBack, // Added this parameter
+  onBack,
 }) => {
   const [showComparison, setShowComparison] = useState(true);
 
@@ -353,11 +352,11 @@ const DocumentEditor: React.FC<{
       return injectSnippetIdsIntoHtml(sanitized, report?.findings ?? []);
     }
     const html = diff
-      .split("\n\n") // treat blank lines as paragraph breaks
+      .split("\n\n")
       .map((para) => {
         const lines = para.split("\n").map((line) => {
-          if (line.startsWith("++ ")) return `<mark class="highlight-added">${escapeHtml(line.substring(3))}</mark>`;
-          if (line.startsWith("-- ")) return `<mark class="highlight-removed"><del>${escapeHtml(line.substring(3))}</del></mark>`;
+          if (line.startsWith("++ ")) return `<mark class=\"highlight-added\">${escapeHtml(line.substring(3))}</mark>`;
+          if (line.startsWith("-- ")) return `<mark class=\"highlight-removed\"><del>${escapeHtml(line.substring(3))}</del></mark>`;
           return escapeHtml(line);
         });
         return `<p>${lines.join("<br />")}</p>`;
@@ -377,7 +376,7 @@ const DocumentEditor: React.FC<{
         .snippet-target { padding: 0 2px; border-radius: 2px; }
         .highlight-added { background: #ecfee8; color: #0b6312; padding: 0 2px; border-radius: 2px; }
         .highlight-removed { background: #ffecec; color: #8a1111; padding: 0 2px; border-radius: 2px; text-decoration: line-through; }
-      `
+      `,
     }} />
   );
 
@@ -398,13 +397,13 @@ const DocumentEditor: React.FC<{
             <ArrowLeftIcon className="w-4 h-4" />
             <span className="text-sm font-medium">Back</span>
           </button>
-          
-          <div className="w-px h-6 bg-gray-300"></div> {/* Separator */}
-          
+
+          <div className="w-px h-6 bg-gray-300" /> {/* Separator */}
+
           <input
             type="text"
             value={report.title ?? ""}
-            onChange={(e) => onContentChange && report && onContentChange(report.documentContent)}
+            onChange={(e) => onTitleChange && onTitleChange(e.target.value)}
             className="text-lg font-bold text-gray-900 bg-transparent border-none focus:outline-none focus:ring-0 flex-1 min-w-0"
             placeholder="Document Title"
             aria-label="Edit document title"
@@ -440,7 +439,7 @@ const DocumentEditor: React.FC<{
         {isEditing ? (
           <textarea
             value={report.documentContent}
-            onChange={(e) => onContentChange(e.target.value)}
+            onChange={(e) => onContentChange && onContentChange(e.target.value)}
             className="w-full h-full bg-transparent focus:outline-none resize-none text-base leading-relaxed font-sans"
             aria-label="Edit document content"
             autoFocus
@@ -734,14 +733,14 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
       doc.setFont("helvetica", "normal");
       doc.setFontSize(11);
 
-      const pageHeight = doc.internal.pageSize.height || 297;
+      const pageHeight = (doc.internal.pageSize.height as number) || 297;
       const margin = 15;
       let y = 30;
-      const lines = doc.splitTextToSize(content, doc.internal.pageSize.width - margin * 2);
+      const lines = doc.splitTextToSize(content, (doc.internal.pageSize.width as number) - margin * 2);
       lines.forEach((line) => {
         if (y + 10 > pageHeight - margin) {
           doc.addPage();
-          y = margin;
+          y = margin + 10;
         }
         doc.text(line, margin, y);
         y += 7;
@@ -815,7 +814,7 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
   };
 
   // Helper: saveReportTitle -> updates local state and calls onUpdateReport
-  async function saveReportTitle(reportId?: string, newTitle?: string) {
+  async function saveReportTitle(newTitle?: string) {
     if (!currentReport) return;
     try {
       const updatedReport = { ...currentReport, title: newTitle ?? currentReport.title };
@@ -850,9 +849,7 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
           <div className="flex items-center justify-between gap-6">
             {/* Left: Workspace title */}
             <div className="min-w-0">
-              <h1 className="text-xl font-bold text-gray-900 truncate">
-                {currentWorkspace?.name || "WORKSPACE TITLE"}
-              </h1>
+              <h1 className="text-xl font-bold text-gray-900 truncate">{currentWorkspace?.name || "WORKSPACE TITLE"}</h1>
             </div>
 
             {/* Center: Metrics */}
@@ -917,6 +914,7 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
             report={currentReport}
             isEditing={isEditing}
             onContentChange={(content) => setCurrentReport({ ...currentReport, documentContent: content })}
+            onTitleChange={(title) => saveReportTitle(title)}
             onSaveChanges={handleSaveChanges}
             onToggleEdit={() => setIsEditing((s) => !s)}
             onDownloadPdf={handleDownloadPdf}
