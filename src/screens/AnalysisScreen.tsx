@@ -38,14 +38,18 @@ import {
   ChevronDownIcon,
   ChevronUpIcon,
   SparklesIcon,
+  PlusIcon,
+  BriefcaseIcon,
+  MoreVerticalIcon,
 } from "../components/Icons";
 
 /* --------------------------------------------------------------------------
-  NOTES:
-  - This file centers & justifies the displayed document (read + edit).
-  - Exported PDF and DOCX will be formatted to match screen display.
-  - TXT export is wrapped to 80 chars (plain text can't justify).
-----------------------------------------------------------------------------*/
+  Full AnalysisScreen.tsx
+  - Centered, justified viewing + editing
+  - Spacing between sections
+  - Auto-bold project-plan keywords
+  - PDF / DOCX / TXT exports to match view
+-----------------------------------------------------------------------------*/
 
 /* -------------------- Utilities & Sanitizer -------------------- */
 
@@ -95,6 +99,7 @@ function sanitizeHtmlAllowlist(html: string) {
   return sanitized;
 }
 
+// inject snippet ids for finding.sourceSnippet into HTML
 function injectSnippetIdsIntoHtml(html: string, findings: Finding[] = []) {
   let out = html;
   for (const f of findings) {
@@ -119,63 +124,60 @@ function injectSnippetIdsIntoHtml(html: string, findings: Finding[] = []) {
   return out;
 }
 
-/* -------------------- text => neat HTML converter -------------------- */
-/* Generic formatter for proposals, budgets, timelines... */
+/* -------------------- text -> neat HTML converter -------------------- */
+/* Adds mb-4 spacing, headings bolded, lists indented, auto-bold keywords */
+
 function textToNeatHtml(input: string): string {
   if (!input) return "";
 
+  // normalize line breaks and trim
   const normalized = input.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
 
+  // split paragraphs / segments: use double-newline OR single newline where sentence boundary
   const segments = normalized
     .split(/(?<=\.)\s+(?=[A-Z])|[\n]{2,}/)
     .map((s) => s.trim())
     .filter(Boolean);
 
   const out: string[] = [];
-
-  const isHeading = (s: string) =>
-    /^(executive summary|summary|introduction|scope|background|conclusion|findings|analysis|recommendations|budget|project timeline|timeline|methodology|objectives|deliverables)[:]?$/i.test(
-      s
-    ) ||
-    (/^[A-Z0-9\s\-&]{3,}$/.test(s) && s.length < 80);
-
-  const isBullet = (s: string) => /^[-•\u2022\*]\s+/.test(s);
-  const isOrdered = (s: string) =>
-    /^\(?\d+\)|^\d+[.)]\s+/.test(s) ||
-    /^\(?[a-zA-Z]\)\s+/.test(s) ||
-    /^(phase|step)\s+\d+/i.test(s);
-
-  const isFieldLabel = (s: string) =>
-    /^[A-Z][\w\s()\-&,]{0,80}:\s+.+/.test(s) && !isHeading(s);
-
   let listMode: null | "ul" | "ol" = null;
   let listItems: string[] = [];
 
   const flushList = () => {
     if (!listMode || listItems.length === 0) return;
     const items = listItems.map((x) => `<li>${escapeHtml(x)}</li>`).join("");
-    out.push(`<${listMode}>${items}</${listMode}>`);
+    const cls = listMode === "ul" ? "list-disc" : "list-decimal";
+    out.push(`<${listMode} class="mb-4 pl-6 ${cls}">${items}</${listMode}>`);
     listMode = null;
     listItems = [];
   };
 
-  const addParagraph = (s: string) => out.push(`<p>${escapeHtml(s)}</p>`);
+  const isHeading = (s: string) =>
+    /^(executive summary|summary|introduction|scope|background|conclusion|findings|analysis|recommendations|budget|project timeline|timeline|methodology|objectives|deliverables)[:]?$/i.test(
+      s
+    ) || (/^[A-Z0-9\s\-\&]{3,}$/.test(s) && s.length < 80);
 
-  // try split inline labels (Budget: ... Total: ...)
-  const trySplitInlineLabels = (s: string) => {
-    const parts = s.split(/(?<=\w:\s[^:]+)\s(?=[A-Z][\w\s()\-]{1,20}:)/g);
+  const isBullet = (s: string) => /^[-•\u2022\*]\s+/.test(s);
+  const isOrdered = (s: string) =>
+    /^\(?\d+\)\s+|^\d+[.)]\s+/.test(s) || /^(phase|step)\s+\d+/i.test(s);
+
+  const isFieldLabel = (s: string) => /^[A-Z][\w\s()\-&,]{0,80}:\s+.+/.test(s);
+
+  // try splitting inline label sequences like "Budget: ... Total: ..."
+  const trySplitInlineLabels = (str: string) => {
+    const parts = str.split(/(?<=\w:\s[^:]+)\s(?=[A-Z][\w\s()\-]{1,20}:)/g);
     if (parts.length > 1) return parts.map((p) => p.trim()).filter(Boolean);
-    return [s];
+    return [str];
   };
 
   for (const segRaw of segments) {
-    const subSegments = trySplitInlineLabels(segRaw);
-    for (const seg of subSegments) {
+    const subs = trySplitInlineLabels(segRaw);
+    for (const seg of subs) {
       if (!seg) continue;
 
       if (isHeading(seg)) {
         flushList();
-        out.push(`<h3>${escapeHtml(seg.replace(/:$/, ""))}</h3>`);
+        out.push(`<h3 class="mb-4 font-bold">${escapeHtml(seg.replace(/:$/, ""))}</h3>`);
         continue;
       }
 
@@ -207,26 +209,48 @@ function textToNeatHtml(input: string): string {
       if (isFieldLabel(seg)) {
         flushList();
         const [label, ...rest] = seg.split(":");
-        out.push(`<p><strong>${escapeHtml(label.trim())}:</strong> ${escapeHtml(rest.join(":").trim())}</p>`);
+        out.push(`<p class="mb-4"><strong>${escapeHtml(label.trim())}:</strong> ${escapeHtml(rest.join(":").trim())}</p>`);
         continue;
       }
 
       flushList();
-      addParagraph(seg);
+      out.push(`<p class="mb-4">${escapeHtml(seg)}</p>`);
     }
   }
 
   flushList();
-  return out.join("\n");
+
+  // auto-bold project plan keywords
+  const emphasizeKeywords = [
+    "Project Overview",
+    "Executive Summary",
+    "Objectives",
+    "Methodology",
+    "Scope",
+    "Deliverables",
+    "Budget",
+    "Project Timeline",
+    "Timeline",
+    "Conclusion",
+    "Risk Assessment",
+    "User Onboarding",
+  ];
+
+  let finalHtml = out.join("\n");
+
+  for (const kw of emphasizeKeywords) {
+    const re = new RegExp(`(${kw})(:)?`, "gi");
+    finalHtml = finalHtml.replace(re, "<strong>$1</strong>$2");
+  }
+
+  return finalHtml;
 }
 
-/* --------------------- diff/plaintext conversion --------------------- */
+/* -------------------- diff -> plain text (for downloads) -------------------- */
 
 function diffToPlainText(diff?: string | null): string {
   if (!diff) return "";
-  if (/<\w+[^>]*>/.test(diff)) {
-    return diff.replace(/<[^>]+>/g, "");
-  }
+  if (/<\w+[^>]*>/.test(diff)) return diff.replace(/<[^>]+>/g, "");
   return diff
     .split("\n")
     .map((line) => {
@@ -238,31 +262,31 @@ function diffToPlainText(diff?: string | null): string {
     .join("\n");
 }
 
-/* --------------------- PDF: justified text renderer --------------------- */
+/* -------------------- PDF justification + basic formatting -------------------- */
 
 /**
- * Adds justified content to a jsPDF instance using greedy line building and space distribution.
- * This is a best-effort justification for readable PDFs.
+ * Best-effort: handle headings (centered bold), bullets (indent), lists, and justify normal paragraphs.
+ * Larger font and wider margins provided by caller via opts.
  */
 function addJustifiedTextToPdf(
   doc: jsPDF,
   content: string,
   opts?: {
-    margin?: number;
+    marginMm?: number;
     fontName?: string;
     fontStyle?: string;
-    fontSize?: number;
+    fontSizePt?: number;
     startY?: number;
-    paragraphSpacing?: number;
+    paragraphSpacingMm?: number;
     lineHeightMultiplier?: number;
   }
 ) {
-  const margin = opts?.margin ?? 20; // mm
+  const margin = opts?.marginMm ?? 25; // mm
   const fontName = opts?.fontName ?? "helvetica";
   const fontStyle = (opts?.fontStyle as any) ?? "normal";
-  const fontSize = opts?.fontSize ?? 11;
-  const paragraphSpacing = opts?.paragraphSpacing ?? fontSize * 0.8;
-  const lineHeightMultiplier = opts?.lineHeightMultiplier ?? 1.25;
+  const fontSize = opts?.fontSizePt ?? 12; // points
+  const paragraphSpacing = opts?.paragraphSpacingMm ?? 3; // mm
+  const lineHeightMultiplier = opts?.lineHeightMultiplier ?? 1.4;
   let y = opts?.startY ?? 30;
 
   // set font
@@ -279,88 +303,130 @@ function addJustifiedTextToPdf(
       : (doc.internal.pageSize as any).height;
 
   const usableWidth = pageWidth - margin * 2;
-  const lineHeight = fontSize * lineHeightMultiplier;
+  const lineHeight = (fontSize / 72) * 25.4 * lineHeightMultiplier; // convert pt -> mm and multiply
 
-  // split paragraphs by double newlines (preserve single-line breaks)
+  // split into paragraphs by double newlines
   const paragraphs = content
     .split(/\n{2,}/)
     .map((p) => p.replace(/\s+/g, " ").trim())
     .filter(Boolean);
 
+  // heading detection set
+  const headingRe = new RegExp(
+    "^(executive summary|summary|project overview|objectives|methodology|scope|deliverables|budget|project timeline|timeline|conclusion|risk assessment|user onboarding)",
+    "i"
+  );
+
   for (const para of paragraphs) {
+    // if heading-like single-line (short), render centered bold and larger
+    if (headingRe.test(para) && para.length < 120) {
+      // center heading
+      const saveFontSize = doc.getFontSize();
+      doc.setFontSize(saveFontSize + 2);
+      doc.setFont(fontName, "bold");
+      if (y + lineHeight > pageHeight - margin) {
+        doc.addPage();
+        y = margin;
+      }
+      doc.text(para.replace(/:$/, ""), pageWidth / 2, y, { align: "center" });
+      y += lineHeight + paragraphSpacing;
+      doc.setFontSize(saveFontSize);
+      doc.setFont(fontName, fontStyle);
+      continue;
+    }
+
+    // handle lists: if para starts with '-' or digit patterns, treat as list block
+    if (/^[-•\u2022*]\s+/.test(para) || /^\d+[.)]\s+/.test(para) || /^(phase|step)\s+\d+/i.test(para)) {
+      // split into lines for this block
+      const items = para.split(/(?:\s*[-•\u2022*]\s+)|(?:\s*\d+[.)]\s+)/).map((s) => s.trim()).filter(Boolean);
+      for (const item of items) {
+        if (y + lineHeight > pageHeight - margin) {
+          doc.addPage();
+          y = margin;
+        }
+        // render bullet with indent
+        const bulletX = margin + 4;
+        const textX = margin + 8;
+        doc.text("•", bulletX, y);
+        // wrap item text within usableWidth - indent
+        const lines = doc.splitTextToSize(item, usableWidth - 8);
+        for (let i = 0; i < lines.length; i++) {
+          const lx = i === 0 ? textX : textX;
+          doc.text(lines[i], lx, y);
+          y += lineHeight;
+          if (y + lineHeight > pageHeight - margin) {
+            doc.addPage();
+            y = margin;
+          }
+        }
+        y += paragraphSpacing;
+      }
+      y += paragraphSpacing;
+      continue;
+    }
+
+    // normal paragraph -> justify
     const words = para.split(" ").filter(Boolean);
     if (words.length === 0) {
       y += paragraphSpacing;
       continue;
     }
 
-    // Build lines (greedy)
-    let currentLineWords: string[] = [];
-    let currentLineWidth = 0;
-    const spaceWidth = doc.getTextWidth(" ");
+    // Greedy line builder using doc.getTextWidth (units mm)
+    const spaceW = doc.getTextWidth(" ");
+    let currentWords: string[] = [];
+    let currentWidth = 0;
 
-    for (let wi = 0; wi < words.length; wi++) {
-      const w = words[wi];
-      const wWidth = doc.getTextWidth(w);
-
-      if (currentLineWords.length === 0) {
-        currentLineWords.push(w);
-        currentLineWidth = wWidth;
+    for (let i = 0; i < words.length; i++) {
+      const w = words[i];
+      const wW = doc.getTextWidth(w);
+      if (currentWords.length === 0) {
+        currentWords.push(w);
+        currentWidth = wW;
       } else {
-        if (currentLineWidth + spaceWidth + wWidth <= usableWidth) {
-          currentLineWords.push(w);
-          currentLineWidth += spaceWidth + wWidth;
+        if (currentWidth + spaceW + wW <= usableWidth) {
+          currentWords.push(w);
+          currentWidth += spaceW + wW;
         } else {
-          // render the current line (justify except for single word)
+          // render current line (justify except last line)
           if (y + lineHeight > pageHeight - margin) {
             doc.addPage();
             y = margin;
-            doc.setFont(fontName, fontStyle);
-            doc.setFontSize(fontSize);
           }
-
-          if (currentLineWords.length === 1) {
-            // single word -> left align within margin
-            doc.text(currentLineWords[0], margin, y);
+          if (currentWords.length === 1) {
+            doc.text(currentWords[0], margin, y);
           } else {
-            const totalWordsWidth = currentLineWords.reduce(
-              (acc, wd) => acc + doc.getTextWidth(wd),
-              0
-            );
-            const gaps = currentLineWords.length - 1;
-            const extraSpace = (usableWidth - totalWordsWidth) / gaps;
+            const totalWordsWidth = currentWords.reduce((acc, wd) => acc + doc.getTextWidth(wd), 0);
+            const gaps = currentWords.length - 1;
+            const extraPerGap = (usableWidth - totalWordsWidth) / gaps;
             let x = margin;
-            for (const wd of currentLineWords) {
+            for (const wd of currentWords) {
               doc.text(wd, x, y);
-              x += doc.getTextWidth(wd) + extraSpace;
+              x += doc.getTextWidth(wd) + extraPerGap;
             }
           }
-
           y += lineHeight;
-          currentLineWords = [w];
-          currentLineWidth = wWidth;
+          currentWords = [w];
+          currentWidth = wW;
         }
       }
     }
 
-    // render the last line of the paragraph (left-aligned)
-    if (currentLineWords.length > 0) {
+    // last line - left aligned
+    if (currentWords.length > 0) {
       if (y + lineHeight > pageHeight - margin) {
         doc.addPage();
         y = margin;
-        doc.setFont(fontName, fontStyle);
-        doc.setFontSize(fontSize);
       }
-      doc.text(currentLineWords.join(" "), margin, y);
+      doc.text(currentWords.join(" "), margin, y);
       y += lineHeight;
     }
 
-    // paragraph spacing
     y += paragraphSpacing;
   }
 }
 
-/* -------------------------- TXT wrap utilities ------------------------- */
+/* -------------------------- TXT wrapping -------------------------- */
 
 function wrapTextToWidth(text: string, maxChars = 80) {
   const paragraphs = text.split(/\n{2,}/).map((p) => p.trim());
@@ -377,9 +443,8 @@ function wrapTextToWidth(text: string, maxChars = 80) {
       }
     }
     if (line) out.push(line);
-    out.push(""); // paragraph break
+    out.push("");
   }
-  // remove last extra blank line
   if (out.length && out[out.length - 1] === "") out.pop();
   return out.join("\n");
 }
@@ -404,7 +469,7 @@ const BackButton: React.FC<{ onBack: () => void; title?: string }> = ({ onBack, 
   </button>
 );
 
-/* -------------------------- Download Dropdown -------------------------- */
+/* ------------------------- Download Dropdown -------------------------- */
 
 const DownloadDropdown: React.FC<{
   onDownloadPdf: () => void;
@@ -439,28 +504,19 @@ const DownloadDropdown: React.FC<{
       {isOpen && (
         <div className="absolute right-0 mt-2 w-44 bg-white rounded-md shadow border z-30">
           <button
-            onClick={() => {
-              onDownloadPdf();
-              setIsOpen(false);
-            }}
+            onClick={() => { onDownloadPdf(); setIsOpen(false); }}
             className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50"
           >
             Download as PDF
           </button>
           <button
-            onClick={() => {
-              onDownloadDocx();
-              setIsOpen(false);
-            }}
+            onClick={() => { onDownloadDocx(); setIsOpen(false); }}
             className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50"
           >
             Download as DOCX
           </button>
           <button
-            onClick={() => {
-              onDownloadTxt();
-              setIsOpen(false);
-            }}
+            onClick={() => { onDownloadTxt(); setIsOpen(false); }}
             className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50"
           >
             Download as TXT
@@ -471,7 +527,7 @@ const DownloadDropdown: React.FC<{
   );
 };
 
-/* ------------------------- Document Editor ------------------------- */
+/* ------------------------- Document Editor Component ------------------------- */
 
 const DocumentEditor: React.FC<{
   report: AnalysisReport;
@@ -523,14 +579,32 @@ const DocumentEditor: React.FC<{
           if (line.startsWith("-- ")) return `<mark class="highlight-removed"><del>${escapeHtml(line.substring(3))}</del></mark>`;
           return escapeHtml(line);
         });
-        return `<p>${lines.join("<br/>")}</p>`;
+        return `<p class="mb-4">${lines.join("<br/>")}</p>`;
       })
       .join("");
     return injectSnippetIdsIntoHtml(html, report?.findings ?? []);
   }, [report, getOriginalHtml]);
 
+  const markFlashStyle = (
+    <style key="analysis-screen-styles" dangerouslySetInnerHTML={{
+      __html: `
+        .mark-flash { animation: markFlash 1.2s ease; }
+        @keyframes markFlash {
+          0% { box-shadow: 0 0 0 8px rgba(255,215,0,0.12); }
+          100% { box-shadow: none; }
+        }
+        .snippet-target { padding: 0 2px; border-radius: 2px; }
+        .highlight-added { background: #ecfee8; color: #0b6312; padding: 0 2px; border-radius: 2px; }
+        .highlight-removed { background: #ffecec; color: #8a1111; padding: 0 2px; border-radius: 2px; text-decoration: line-through; }
+      `
+    }} />
+  );
+
   return (
     <div className="bg-white rounded-xl shadow-lg border border-gray-200 flex flex-col h-full">
+      {markFlashStyle}
+
+      {/* Title & controls */}
       <div className="p-3 flex items-center justify-between border-b bg-gray-50">
         <div className="flex items-center gap-3 flex-1 min-w-0">
           <button
@@ -542,7 +616,9 @@ const DocumentEditor: React.FC<{
             <ArrowLeftIcon className="w-4 h-4" />
             <span className="text-sm font-medium">Back</span>
           </button>
+
           <div className="w-px h-6 bg-gray-300" />
+
           <input
             type="text"
             value={report.title ?? ""}
@@ -558,6 +634,7 @@ const DocumentEditor: React.FC<{
             <button
               onClick={() => setShowComparison((s) => !s)}
               className="px-3 py-1.5 rounded-lg border text-sm bg-white hover:bg-gray-50"
+              aria-pressed={!showComparison}
             >
               {showComparison ? "Enhanced Only" : "Compare"}
             </button>
@@ -577,13 +654,14 @@ const DocumentEditor: React.FC<{
         </div>
       </div>
 
+      {/* Content */}
       <div className="p-4 flex-1 overflow-auto">
         {isEditing ? (
           <div className="flex justify-center">
             <textarea
               value={report.documentContent}
               onChange={(e) => onContentChange && onContentChange(e.target.value)}
-              className="w-full max-w-3xl mx-auto text-justify leading-relaxed bg-transparent focus:outline-none resize-none text-base font-sans px-6 py-4"
+              className="w-full max-w-3xl mx-auto text-justify leading-relaxed bg-transparent focus:outline-none resize-none text-base font-sans px-6 py-6"
               aria-label="Edit document content"
               autoFocus
             />
@@ -890,23 +968,23 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
         format: "a4",
       });
 
-      // Title (centered)
+      // Title: centered, bold
       doc.setFont("helvetica", "bold");
       doc.setFontSize(16);
       const pageWidth = typeof doc.internal.pageSize.getWidth === "function"
         ? doc.internal.pageSize.getWidth()
         : (doc.internal.pageSize as any).width;
-      doc.text(title, pageWidth / 2, 20, { align: "center" });
+      doc.text(title, pageWidth / 2, 24, { align: "center" });
 
-      // Add justified body starting a bit lower
+      // Body: larger font, wider margins, better line height
       addJustifiedTextToPdf(doc, content, {
-        margin: 20,
+        marginMm: 25,
         fontName: "helvetica",
         fontStyle: "normal",
-        fontSize: 11,
-        startY: 30,
-        paragraphSpacing: 6,
-        lineHeightMultiplier: 1.25,
+        fontSizePt: 12,
+        startY: 34,
+        paragraphSpacingMm: 4,
+        lineHeightMultiplier: 1.4,
       });
 
       doc.save(`${title}.pdf`);
@@ -948,9 +1026,9 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
         .map(
           (p) =>
             new Paragraph({
-              children: [new TextRun(p)],
+              children: [new TextRun({ text: p, size: 24 })], // 24 half-points = 12pt
               alignment: AlignmentType.JUSTIFIED,
-              spacing: { after: 120 }, // small spacing after paragraph
+              spacing: { after: 160 }, // spacing after
             })
         );
 
@@ -959,12 +1037,12 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
           {
             properties: {
               page: {
-                margin: { top: 1440, right: 1440, bottom: 1440, left: 1440 }, // 1" margins (twips)
+                margin: { top: 1800, right: 1800, bottom: 1800, left: 1800 }, // ~1.25" margins (twips)
               } as any,
             },
             children: [
               new Paragraph({
-                children: [new TextRun({ text: title, bold: true, size: 28 })],
+                children: [new TextRun({ text: title, bold: true, size: 40 })], // title ~20pt
                 alignment: AlignmentType.CENTER,
                 spacing: { after: 240 },
               }),
@@ -1078,7 +1156,6 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
         </div>
       </header>
 
-      {/* Enhancing overlay */}
       {isEnhancing && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-white/80 backdrop-blur-sm">
           <div className="bg-white rounded-2xl p-6 shadow border">
@@ -1089,7 +1166,7 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
         </div>
       )}
 
-      {/* Main */}
+      {/* Main layout */}
       <main className="flex-1 p-4 grid grid-cols-1 lg:grid-cols-4 gap-4 w-full">
         <section className="lg:col-span-3">
           <DocumentEditor
