@@ -3,7 +3,13 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import jsPDF from "jspdf";
-import { Document as DocxDocument, Packer, Paragraph, TextRun } from "docx";
+import {
+  Document as DocxDocument,
+  Packer,
+  Paragraph,
+  TextRun,
+  AlignmentType,
+} from "docx";
 
 import {
   AnalysisReport,
@@ -35,11 +41,10 @@ import {
 } from "../components/Icons";
 
 /* --------------------------------------------------------------------------
-  NOTES / USAGE
-  - For best appearance enable Tailwind Typography plugin:
-    npm i @tailwindcss/typography
-    and add to tailwind.config.js -> plugins: [require('@tailwindcss/typography')]
-  - Keep docx & jspdf installed: npm i docx jspdf
+  NOTES:
+  - This file centers & justifies the displayed document (read + edit).
+  - Exported PDF and DOCX will be formatted to match screen display.
+  - TXT export is wrapped to 80 chars (plain text can't justify).
 ----------------------------------------------------------------------------*/
 
 /* -------------------- Utilities & Sanitizer -------------------- */
@@ -54,7 +59,6 @@ const escapeHtml = (unsafe: string) =>
 
 const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-// Conservative whitelist sanitizer for small HTML fragments (used for diffs)
 function sanitizeHtmlAllowlist(html: string) {
   let sanitized = html.replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, "");
   sanitized = sanitized.replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, "");
@@ -91,7 +95,6 @@ function sanitizeHtmlAllowlist(html: string) {
   return sanitized;
 }
 
-// inject snippet ids for finding.sourceSnippet into HTML (first occurrence only)
 function injectSnippetIdsIntoHtml(html: string, findings: Finding[] = []) {
   let out = html;
   for (const f of findings) {
@@ -100,7 +103,6 @@ function injectSnippetIdsIntoHtml(html: string, findings: Finding[] = []) {
     if (!snippet) continue;
     try {
       const escapedSnippet = escapeHtml(snippet);
-      // match either escaped or plain snippet (case-insensitive)
       const re = new RegExp(escapeRegExp(escapedSnippet), "i");
       if (re.test(out)) {
         out = out.replace(re, `<span id="snippet-${f.id}" class="snippet-target">${escapedSnippet}</span>`);
@@ -117,14 +119,13 @@ function injectSnippetIdsIntoHtml(html: string, findings: Finding[] = []) {
   return out;
 }
 
-/* ---------------- Improved text => neat HTML converter ------------------ */
-/* Generic, robust formatter for proposals, budgets, timelines, etc.        */
+/* -------------------- text => neat HTML converter -------------------- */
+/* Generic formatter for proposals, budgets, timelines... */
 function textToNeatHtml(input: string): string {
   if (!input) return "";
 
   const normalized = input.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
 
-  // Aggressive segmentation: split on double-newlines (paragraphs) OR sentence breaks
   const segments = normalized
     .split(/(?<=\.)\s+(?=[A-Z])|[\n]{2,}/)
     .map((s) => s.trim())
@@ -132,12 +133,11 @@ function textToNeatHtml(input: string): string {
 
   const out: string[] = [];
 
-  // --- Detection helpers ---
   const isHeading = (s: string) =>
     /^(executive summary|summary|introduction|scope|background|conclusion|findings|analysis|recommendations|budget|project timeline|timeline|methodology|objectives|deliverables)[:]?$/i.test(
       s
     ) ||
-    (/^[A-Z0-9\s\-&]{3,}$/.test(s) && s.length < 80); // ALL CAPS short lines
+    (/^[A-Z0-9\s\-&]{3,}$/.test(s) && s.length < 80);
 
   const isBullet = (s: string) => /^[-•\u2022\*]\s+/.test(s);
   const isOrdered = (s: string) =>
@@ -145,11 +145,9 @@ function textToNeatHtml(input: string): string {
     /^\(?[a-zA-Z]\)\s+/.test(s) ||
     /^(phase|step)\s+\d+/i.test(s);
 
-  // label: value lines like "Project Title: SecurePay PH" (not headings)
   const isFieldLabel = (s: string) =>
-    /^[A-Z][\w\s().,-]{0,80}:\s+.+/.test(s) && !isHeading(s);
+    /^[A-Z][\w\s()\-&,]{0,80}:\s+.+/.test(s) && !isHeading(s);
 
-  // --- Utilities & state ---
   let listMode: null | "ul" | "ol" = null;
   let listItems: string[] = [];
 
@@ -163,19 +161,15 @@ function textToNeatHtml(input: string): string {
 
   const addParagraph = (s: string) => out.push(`<p>${escapeHtml(s)}</p>`);
 
-  // If original text had single-line blocks with many "Label: Value Label2: Value2", try splitting those into labeled paragraphs
+  // try split inline labels (Budget: ... Total: ...)
   const trySplitInlineLabels = (s: string) => {
-    // find sequences like "Label1: value1 Label2: value2"
     const parts = s.split(/(?<=\w:\s[^:]+)\s(?=[A-Z][\w\s()\-]{1,20}:)/g);
     if (parts.length > 1) return parts.map((p) => p.trim()).filter(Boolean);
     return [s];
   };
 
-  // --- Main loop ---
   for (const segRaw of segments) {
-    // try splitting inline labels first (e.g., "Budget: X Total: Y")
     const subSegments = trySplitInlineLabels(segRaw);
-
     for (const seg of subSegments) {
       if (!seg) continue;
 
@@ -213,13 +207,10 @@ function textToNeatHtml(input: string): string {
       if (isFieldLabel(seg)) {
         flushList();
         const [label, ...rest] = seg.split(":");
-        out.push(
-          `<p><strong>${escapeHtml(label.trim())}:</strong> ${escapeHtml(rest.join(":").trim())}</p>`
-        );
+        out.push(`<p><strong>${escapeHtml(label.trim())}:</strong> ${escapeHtml(rest.join(":").trim())}</p>`);
         continue;
       }
 
-      // fallback paragraph
       flushList();
       addParagraph(seg);
     }
@@ -234,18 +225,163 @@ function textToNeatHtml(input: string): string {
 function diffToPlainText(diff?: string | null): string {
   if (!diff) return "";
   if (/<\w+[^>]*>/.test(diff)) {
-    // remove tags conservatively
     return diff.replace(/<[^>]+>/g, "");
   }
   return diff
     .split("\n")
     .map((line) => {
       if (line.startsWith("++ ")) return line.substring(3);
-      if (line.startsWith("-- ")) return ""; // drop removed lines
+      if (line.startsWith("-- ")) return "";
       return line;
     })
     .filter((l) => l.trim() !== "")
     .join("\n");
+}
+
+/* --------------------- PDF: justified text renderer --------------------- */
+
+/**
+ * Adds justified content to a jsPDF instance using greedy line building and space distribution.
+ * This is a best-effort justification for readable PDFs.
+ */
+function addJustifiedTextToPdf(
+  doc: jsPDF,
+  content: string,
+  opts?: {
+    margin?: number;
+    fontName?: string;
+    fontStyle?: string;
+    fontSize?: number;
+    startY?: number;
+    paragraphSpacing?: number;
+    lineHeightMultiplier?: number;
+  }
+) {
+  const margin = opts?.margin ?? 20; // mm
+  const fontName = opts?.fontName ?? "helvetica";
+  const fontStyle = (opts?.fontStyle as any) ?? "normal";
+  const fontSize = opts?.fontSize ?? 11;
+  const paragraphSpacing = opts?.paragraphSpacing ?? fontSize * 0.8;
+  const lineHeightMultiplier = opts?.lineHeightMultiplier ?? 1.25;
+  let y = opts?.startY ?? 30;
+
+  // set font
+  doc.setFont(fontName, fontStyle);
+  doc.setFontSize(fontSize);
+
+  const pageWidth =
+    typeof doc.internal.pageSize.getWidth === "function"
+      ? doc.internal.pageSize.getWidth()
+      : (doc.internal.pageSize as any).width;
+  const pageHeight =
+    typeof doc.internal.pageSize.getHeight === "function"
+      ? doc.internal.pageSize.getHeight()
+      : (doc.internal.pageSize as any).height;
+
+  const usableWidth = pageWidth - margin * 2;
+  const lineHeight = fontSize * lineHeightMultiplier;
+
+  // split paragraphs by double newlines (preserve single-line breaks)
+  const paragraphs = content
+    .split(/\n{2,}/)
+    .map((p) => p.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+
+  for (const para of paragraphs) {
+    const words = para.split(" ").filter(Boolean);
+    if (words.length === 0) {
+      y += paragraphSpacing;
+      continue;
+    }
+
+    // Build lines (greedy)
+    let currentLineWords: string[] = [];
+    let currentLineWidth = 0;
+    const spaceWidth = doc.getTextWidth(" ");
+
+    for (let wi = 0; wi < words.length; wi++) {
+      const w = words[wi];
+      const wWidth = doc.getTextWidth(w);
+
+      if (currentLineWords.length === 0) {
+        currentLineWords.push(w);
+        currentLineWidth = wWidth;
+      } else {
+        if (currentLineWidth + spaceWidth + wWidth <= usableWidth) {
+          currentLineWords.push(w);
+          currentLineWidth += spaceWidth + wWidth;
+        } else {
+          // render the current line (justify except for single word)
+          if (y + lineHeight > pageHeight - margin) {
+            doc.addPage();
+            y = margin;
+            doc.setFont(fontName, fontStyle);
+            doc.setFontSize(fontSize);
+          }
+
+          if (currentLineWords.length === 1) {
+            // single word -> left align within margin
+            doc.text(currentLineWords[0], margin, y);
+          } else {
+            const totalWordsWidth = currentLineWords.reduce(
+              (acc, wd) => acc + doc.getTextWidth(wd),
+              0
+            );
+            const gaps = currentLineWords.length - 1;
+            const extraSpace = (usableWidth - totalWordsWidth) / gaps;
+            let x = margin;
+            for (const wd of currentLineWords) {
+              doc.text(wd, x, y);
+              x += doc.getTextWidth(wd) + extraSpace;
+            }
+          }
+
+          y += lineHeight;
+          currentLineWords = [w];
+          currentLineWidth = wWidth;
+        }
+      }
+    }
+
+    // render the last line of the paragraph (left-aligned)
+    if (currentLineWords.length > 0) {
+      if (y + lineHeight > pageHeight - margin) {
+        doc.addPage();
+        y = margin;
+        doc.setFont(fontName, fontStyle);
+        doc.setFontSize(fontSize);
+      }
+      doc.text(currentLineWords.join(" "), margin, y);
+      y += lineHeight;
+    }
+
+    // paragraph spacing
+    y += paragraphSpacing;
+  }
+}
+
+/* -------------------------- TXT wrap utilities ------------------------- */
+
+function wrapTextToWidth(text: string, maxChars = 80) {
+  const paragraphs = text.split(/\n{2,}/).map((p) => p.trim());
+  const out: string[] = [];
+  for (const para of paragraphs) {
+    const words = para.split(/\s+/);
+    let line = "";
+    for (const w of words) {
+      if ((line + " " + w).trim().length <= maxChars) {
+        line = (line + " " + w).trim();
+      } else {
+        if (line) out.push(line);
+        line = w;
+      }
+    }
+    if (line) out.push(line);
+    out.push(""); // paragraph break
+  }
+  // remove last extra blank line
+  if (out.length && out[out.length - 1] === "") out.pop();
+  return out.join("\n");
 }
 
 /* ----------------------------- Small UI Bits ----------------------------- */
@@ -373,9 +509,7 @@ const DocumentEditor: React.FC<{
   }, [report]);
 
   const getEnhancedHtml = useMemo(() => {
-    if (!report?.diffContent) {
-      return getOriginalHtml;
-    }
+    if (!report?.diffContent) return getOriginalHtml;
     const diff = report.diffContent;
     if (/<\w+[^>]*>/.test(diff)) {
       const sanitized = sanitizeHtmlAllowlist(diff);
@@ -389,32 +523,14 @@ const DocumentEditor: React.FC<{
           if (line.startsWith("-- ")) return `<mark class="highlight-removed"><del>${escapeHtml(line.substring(3))}</del></mark>`;
           return escapeHtml(line);
         });
-        return `<p>${lines.join("<br />")}</p>`;
+        return `<p>${lines.join("<br/>")}</p>`;
       })
       .join("");
     return injectSnippetIdsIntoHtml(html, report?.findings ?? []);
   }, [report, getOriginalHtml]);
 
-  const markFlashStyle = (
-    <style key="analysis-screen-styles" dangerouslySetInnerHTML={{
-      __html: `
-        .mark-flash { animation: markFlash 1.2s ease; }
-        @keyframes markFlash {
-          0% { box-shadow: 0 0 0 6px rgba(255,215,0,0.12); }
-          100% { box-shadow: none; }
-        }
-        .snippet-target { padding: 0 2px; border-radius: 2px; }
-        .highlight-added { background: #ecfee8; color: #0b6312; padding: 0 2px; border-radius: 2px; }
-        .highlight-removed { background: #ffecec; color: #8a1111; padding: 0 2px; border-radius: 2px; text-decoration: line-through; }
-      `,
-    }} />
-  );
-
   return (
     <div className="bg-white rounded-xl shadow-lg border border-gray-200 flex flex-col h-full">
-      {markFlashStyle}
-
-      {/* Document title and controls */}
       <div className="p-3 flex items-center justify-between border-b bg-gray-50">
         <div className="flex items-center gap-3 flex-1 min-w-0">
           <button
@@ -426,14 +542,12 @@ const DocumentEditor: React.FC<{
             <ArrowLeftIcon className="w-4 h-4" />
             <span className="text-sm font-medium">Back</span>
           </button>
-
           <div className="w-px h-6 bg-gray-300" />
-
           <input
             type="text"
             value={report.title ?? ""}
             onChange={(e) => onTitleChange && onTitleChange(e.target.value)}
-            className="text-lg font-bold text-gray-900 bg-transparent border-none focus:outline-none focus:ring-0 flex-1 min-w-0"
+            className="text-lg font-bold text-gray-900 bg-transparent border-none focus:outline-none flex-1 min-w-0"
             placeholder="Document Title"
             aria-label="Edit document title"
           />
@@ -444,7 +558,6 @@ const DocumentEditor: React.FC<{
             <button
               onClick={() => setShowComparison((s) => !s)}
               className="px-3 py-1.5 rounded-lg border text-sm bg-white hover:bg-gray-50"
-              aria-pressed={!showComparison}
             >
               {showComparison ? "Enhanced Only" : "Compare"}
             </button>
@@ -466,21 +579,22 @@ const DocumentEditor: React.FC<{
 
       <div className="p-4 flex-1 overflow-auto">
         {isEditing ? (
-          <textarea
-            value={report.documentContent}
-            onChange={(e) => onContentChange && onContentChange(e.target.value)}
-            className="w-full h-full bg-transparent focus:outline-none resize-none text-base leading-relaxed font-sans"
-            aria-label="Edit document content"
-            autoFocus
-          />
+          <div className="flex justify-center">
+            <textarea
+              value={report.documentContent}
+              onChange={(e) => onContentChange && onContentChange(e.target.value)}
+              className="w-full max-w-3xl mx-auto text-justify leading-relaxed bg-transparent focus:outline-none resize-none text-base font-sans px-6 py-4"
+              aria-label="Edit document content"
+              autoFocus
+            />
+          </div>
         ) : report.diffContent && showComparison ? (
           <div className="grid md:grid-cols-2 gap-6 h-full">
             <div>
               <h3 className="text-sm font-semibold text-gray-500 mb-2">Original</h3>
-              <div id="original-content" className="border rounded-lg p-4 bg-white">
-                {/* Final rendering: justified + margins + readable typography */}
+              <div className="flex justify-center">
                 <div
-                  className="prose max-w-none dark:prose-invert text-justify leading-relaxed px-2"
+                  className="prose max-w-3xl mx-auto text-justify leading-relaxed px-6"
                   dangerouslySetInnerHTML={{ __html: getOriginalHtml }}
                 />
               </div>
@@ -488,22 +602,20 @@ const DocumentEditor: React.FC<{
 
             <div>
               <h3 className="text-sm font-semibold text-gray-500 mb-2">Enhanced</h3>
-              <div id="enhanced-content" className="border rounded-lg p-4 bg-white">
+              <div className="flex justify-center">
                 <div
-                  className="prose max-w-none dark:prose-invert text-justify leading-relaxed px-2"
+                  className="prose max-w-3xl mx-auto text-justify leading-relaxed px-6"
                   dangerouslySetInnerHTML={{ __html: getEnhancedHtml }}
                 />
               </div>
             </div>
           </div>
         ) : (
-          <div className="h-full">
-            <div className="border rounded-lg p-6 bg-white h-full">
-              <div
-                className="prose max-w-none dark:prose-invert text-justify leading-relaxed px-2"
-                dangerouslySetInnerHTML={{ __html: report.diffContent ? getEnhancedHtml : getOriginalHtml }}
-              />
-            </div>
+          <div className="flex justify-center">
+            <div
+              className="prose max-w-3xl mx-auto text-justify leading-relaxed px-6"
+              dangerouslySetInnerHTML={{ __html: report.diffContent ? getEnhancedHtml : getOriginalHtml }}
+            />
           </div>
         )}
       </div>
@@ -521,7 +633,6 @@ const ActionableFindings: React.FC<{
   onClick: (id: string) => void;
 }> = ({ findings, onDismiss, onResolve, onHover, onClick }) => {
   const [openId, setOpenId] = useState<string | null>(null);
-
   const toggle = (id: string) => setOpenId((prev) => (prev === id ? null : id));
 
   return (
@@ -766,31 +877,36 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
     return report.documentContent ?? "";
   };
 
+  /* ------------------------ Export: PDF / TXT / DOCX ------------------------ */
+
   const handleDownloadPdf = () => {
     if (!currentReport) return;
     try {
-      const doc = new jsPDF();
       const title = (currentReport.title || "document").replace(/\.[^/.]+$/, "");
-      const content = getContentForDownload(currentReport);
+      const content = getContentForDownload(currentReport) || "";
 
-      doc.setProperties({ title });
+      const doc = new jsPDF({
+        unit: "mm",
+        format: "a4",
+      });
+
+      // Title (centered)
       doc.setFont("helvetica", "bold");
       doc.setFontSize(16);
-      doc.text(title, 15, 20);
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(11);
+      const pageWidth = typeof doc.internal.pageSize.getWidth === "function"
+        ? doc.internal.pageSize.getWidth()
+        : (doc.internal.pageSize as any).width;
+      doc.text(title, pageWidth / 2, 20, { align: "center" });
 
-      const pageHeight = (doc.internal.pageSize.height as number) || 297;
-      const margin = 15;
-      let y = 30;
-      const lines = doc.splitTextToSize(content, (doc.internal.pageSize.width as number) - margin * 2);
-      lines.forEach((line) => {
-        if (y + 10 > pageHeight - margin) {
-          doc.addPage();
-          y = margin + 10;
-        }
-        doc.text(line, margin, y);
-        y += 7;
+      // Add justified body starting a bit lower
+      addJustifiedTextToPdf(doc, content, {
+        margin: 20,
+        fontName: "helvetica",
+        fontStyle: "normal",
+        fontSize: 11,
+        startY: 30,
+        paragraphSpacing: 6,
+        lineHeightMultiplier: 1.25,
       });
 
       doc.save(`${title}.pdf`);
@@ -803,8 +919,9 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
     if (!currentReport) return;
     try {
       const title = (currentReport.title || "document").replace(/\.[^/.]+$/, "");
-      const content = getContentForDownload(currentReport);
-      const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+      const content = getContentForDownload(currentReport) || "";
+      const wrapped = wrapTextToWidth(content, 80);
+      const blob = new Blob([wrapped], { type: "text/plain;charset=utf-8" });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
@@ -822,15 +939,37 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
     if (!currentReport) return;
     try {
       const title = (currentReport.title || "document").replace(/\.[^/.]+$/, "");
-      const content = getContentForDownload(currentReport);
+      const content = getContentForDownload(currentReport) || "";
+
+      const paragraphs = content
+        .split(/\n{2,}/)
+        .map((p) => p.replace(/\s+/g, " ").trim())
+        .filter(Boolean)
+        .map(
+          (p) =>
+            new Paragraph({
+              children: [new TextRun(p)],
+              alignment: AlignmentType.JUSTIFIED,
+              spacing: { after: 120 }, // small spacing after paragraph
+            })
+        );
+
       const doc = new DocxDocument({
         sections: [
           {
-            children: content.split("\n").map((line) =>
+            properties: {
+              page: {
+                margin: { top: 1440, right: 1440, bottom: 1440, left: 1440 }, // 1" margins (twips)
+              } as any,
+            },
+            children: [
               new Paragraph({
-                children: [new TextRun(line)],
-              })
-            ),
+                children: [new TextRun({ text: title, bold: true, size: 28 })],
+                alignment: AlignmentType.CENTER,
+                spacing: { after: 240 },
+              }),
+              ...paragraphs,
+            ],
           },
         ],
       });
@@ -850,6 +989,8 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
     }
   };
 
+  /* ---------------------- Save helpers & state ---------------------- */
+
   const handleSaveChanges = () => {
     setIsEditing(false);
     if (!currentReport) return;
@@ -860,7 +1001,6 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
     }
   };
 
-  // Helper: saveReportTitle -> updates local state and calls onUpdateReport
   async function saveReportTitle(newTitle?: string) {
     if (!currentReport) return;
     try {
@@ -885,21 +1025,18 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
     );
   }
 
-  // Only show active findings in actionable panel
   const activeFindings = currentReport.findings?.filter((f) => f.status === "active") ?? [];
 
   return (
     <div className="h-full bg-gray-50 flex flex-col">
-      {/* Header with workspace title, metrics, and Auto-Enhance */}
+      {/* Header */}
       <header className="bg-white border-b shadow-sm flex-shrink-0">
         <div className="px-6 py-4">
           <div className="flex items-center justify-between gap-6">
-            {/* Left: Workspace title */}
             <div className="min-w-0">
               <h1 className="text-xl font-bold text-gray-900 truncate">{currentWorkspace?.name || "WORKSPACE TITLE"}</h1>
             </div>
 
-            {/* Center: Metrics */}
             <div className="flex items-center gap-8 overflow-x-auto">
               <div className="text-center min-w-[80px]">
                 <p className="text-sm text-gray-600">Project Score</p>
@@ -922,7 +1059,6 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
               </div>
             </div>
 
-            {/* Right: Auto-Enhance button */}
             <div className="min-w-[140px]">
               <button
                 onClick={handleAutoEnhance}
@@ -942,7 +1078,7 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
         </div>
       </header>
 
-      {/* Overlay loader when enhancing */}
+      {/* Enhancing overlay */}
       {isEnhancing && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-white/80 backdrop-blur-sm">
           <div className="bg-white rounded-2xl p-6 shadow border">
@@ -953,9 +1089,8 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
         </div>
       )}
 
-      {/* Main content */}
+      {/* Main */}
       <main className="flex-1 p-4 grid grid-cols-1 lg:grid-cols-4 gap-4 w-full">
-        {/* Document area (3/4 width) */}
         <section className="lg:col-span-3">
           <DocumentEditor
             report={currentReport}
@@ -973,9 +1108,7 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
           />
         </section>
 
-        {/* Right column: Analysis panel (1/4 width) */}
         <aside className="lg:col-span-1 space-y-4 flex flex-col">
-          {/* Actionable Findings */}
           <div className="bg-white rounded-xl shadow p-4 border flex-1 min-h-0">
             <h4 className="font-bold mb-3">Actionable Findings ({activeFindings.length})</h4>
             <div className="overflow-auto h-full">
@@ -997,14 +1130,12 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
             </div>
           </div>
 
-          {/* Chat Panel */}
           <div className="h-[380px] flex-shrink-0">
             <ChatPanel documentContent={currentReport.documentContent ?? ""} />
           </div>
         </aside>
       </main>
 
-      {/* Feedback modal if dismissing */}
       {feedbackFinding && (
         <FeedbackModal finding={feedbackFinding} onClose={() => setFeedbackFinding(null)} onSubmit={handleDismissSubmit} />
       )}
