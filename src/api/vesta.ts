@@ -1,3 +1,4 @@
+// src/api/vesta.ts
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { AnalysisReport, Finding, KnowledgeSource, DismissalRule, CustomRegulation, ChatMessage } from '../types';
 import { diffWordsWithSpace } from 'diff';
@@ -9,19 +10,19 @@ let ai: GoogleGenAI | null = null;
  * Throws an error if the API key is not available.
  */
 function getGenAIClient(): GoogleGenAI {
-    // Use Vite's special way to access environment variables
     const apiKey = process.env.GEMINI_API_KEY;
-
     if (!apiKey) {
-        // This is a safeguard. The main App component should catch this earlier.
-        throw new Error("VITE_API_KEY environment variable is not set. Please configure it in your deployment settings.");
+        throw new Error("GEMINI_API_KEY environment variable is not set. Please configure it in your deployment settings.");
     }
     if (!ai) {
-        ai = new GoogleGenAI({ apiKey: apiKey });
+        ai = new GoogleGenAI({ apiKey });
     }
     return ai;
 }
 
+/* -----------------------------
+   Report schema (used by analyze calls)
+   ----------------------------- */
 const reportSchema = {
     type: Type.OBJECT,
     properties: {
@@ -78,6 +79,75 @@ const reportSchema = {
     required: ["scores", "findings"],
 };
 
+/* ================================
+   Helper: robust text extraction
+   ================================ */
+const extractTextFromGenAIResponse = (resp: any): string => {
+    // different SDK fields may exist depending on API version, try common ones
+    if (!resp) return '';
+    if (typeof resp.text === 'string' && resp.text.trim().length > 0) return resp.text;
+    if (typeof resp.outputText === 'string' && resp.outputText.trim().length > 0) return resp.outputText;
+    if (resp?.candidates?.[0]?.content) return String(resp.candidates[0].content);
+    // fallback to JSON string of response
+    try { return JSON.stringify(resp); } catch { return String(resp); }
+};
+
+/* ============================
+   Utility: clean model output
+   - strips code fences
+   - removes diff artifacts
+   - normalizes whitespace
+   ============================ */
+function cleanOutput(raw: string) {
+    let out = String(raw || '');
+    // extract inside fenced code block if present
+    const codeBlockMatch = out.match(/```(?:[\w-]+\n)?([\s\S]*?)```/);
+    if (codeBlockMatch && codeBlockMatch[1]) out = codeBlockMatch[1];
+
+    // remove lines that look like git diffs/patch metadata
+    out = out
+        .split('\n')
+        .map(line => line.replace(/^\s*(\+\+|--|\+|-|>\s|<\s)\s?/, ''))
+        .filter(line => !/^(diff --git|index |@@ |--- |\+\+\+ )/.test(line))
+        .join('\n');
+
+    // strip zero-width and RTF junk
+    out = out.replace(/[\u200B-\u200F\uFEFF]/g, '').replace(/^\s*{\\rtf1[\s\S]*?}/, '');
+    out = out.replace(/\r\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+    return out;
+}
+
+/* ============================
+   Similarity: token overlap (Jaccard)
+   Returns value in [0,1]
+   ============================ */
+function tokenOverlap(a: string, b: string): number {
+    const tokenize = (s: string) =>
+        String(s || '')
+            .toLowerCase()
+            .replace(/[^\w\s]/g, ' ')
+            .split(/\s+/)
+            .filter(Boolean);
+
+    const ta = new Set(tokenize(a));
+    const tb = new Set(tokenize(b));
+
+    if (ta.size === 0 && tb.size === 0) return 1;
+    if (ta.size === 0 || tb.size === 0) return 0;
+
+    let inter = 0;
+    for (const t of ta) if (tb.has(t)) inter++;
+
+    const union = new Set([...ta, ...tb]).size;
+    // Jaccard index
+    const jaccard = inter / Math.max(1, union);
+    return jaccard;
+}
+
+/* ============================
+   Primary Analyzer (unchanged logic)
+   (kept for completeness; you can keep or replace with your version)
+   ============================ */
 export async function analyzePlan(planContent: string, knowledgeSources: KnowledgeSource[], dismissalRules: DismissalRule[], customRegulations: CustomRegulation[]): Promise<Omit<AnalysisReport, 'id' | 'workspaceId' | 'createdAt'>> {
     if (!planContent.trim()) {
         return {
@@ -125,7 +195,7 @@ export async function analyzePlan(planContent: string, knowledgeSources: Knowled
             },
         });
 
-        const jsonText = response.text.trim();
+        const jsonText = extractTextFromGenAIResponse(response).trim();
         const parsedReport = JSON.parse(jsonText);
 
         const criticalCount = parsedReport.findings.filter((f: any) => f.severity === 'critical').length;
@@ -173,10 +243,7 @@ export async function analyzePlan(planContent: string, knowledgeSources: Knowled
 
 // Quick analysis: smaller input and minimal context for speed
 export async function analyzePlanQuick(planContent: string, knowledgeSources: KnowledgeSource[], dismissalRules: DismissalRule[], customRegulations: CustomRegulation[]): Promise<Omit<AnalysisReport, 'id' | 'workspaceId' | 'createdAt'>> {
-    // Truncate input aggressively (first ~4000 characters)
     const truncated = String(planContent || '').slice(0, 4000);
-
-    // Keep only dismissal rules (cheap), drop heavy KB and custom regs to minimize token/context size
     const minimalSources: KnowledgeSource[] = [];
     const minimalCustom: CustomRegulation[] = [];
 
@@ -191,7 +258,7 @@ export async function analyzePlanQuick(planContent: string, knowledgeSources: Kn
             },
         });
 
-        const jsonText = response.text.trim();
+        const jsonText = extractTextFromGenAIResponse(response).trim();
         const parsedReport = JSON.parse(jsonText);
         const criticalCount = parsedReport.findings.filter((f: any) => f.severity === 'critical').length;
         const warningCount = parsedReport.findings.filter((f: any) => f.severity === 'warning').length;
@@ -211,7 +278,7 @@ export async function analyzePlanQuick(planContent: string, knowledgeSources: Kn
             summary: {
                 critical: criticalCount,
                 warning: warningCount,
-                checks: 300, // smaller/faster
+                checks: 300,
             },
             documentContent: truncated,
         };
@@ -222,164 +289,143 @@ export async function analyzePlanQuick(planContent: string, knowledgeSources: Kn
     }
 }
 
+/* ============================
+   IMPROVE PLAN — conservative, two-pass approach
+   Signature preserves original usage: improvePlan(planContent, report)
+   ============================ */
 export async function improvePlan(planContent: string, report: AnalysisReport): Promise<string> {
-    if (!planContent.trim() || !report || report.findings.length === 0) {
-        return planContent; // Nothing to improve
-    }
+    if (!planContent || !planContent.trim()) return planContent;
+    // Build findings summary as bullet list
+    const findingsSummary = (report?.findings || []).map(f =>
+        `- Finding: "${f.title}" (Severity: ${f.severity})\n  - Source Snippet: "${f.sourceSnippet}"\n  - Recommendation: ${f.recommendation}`
+    ).join('\n\n') || 'No findings provided.';
 
-    const findingsSummary = report.findings.map(f =>
-        `- Finding: "${f.title}" (Severity: ${f.severity})\n` +
-        `  - Source Snippet: "${f.sourceSnippet}"\n` +
-        `  - Recommendation: ${f.recommendation}`
-    ).join('\n\n');
+    // Normalise a bit before sending to the model
+    const normalizedPlan = planContent.replace(/\r\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 
-    const genai = getGenAIClient();
-
+    // Conservative system prompt (forces inline edits only)
     const systemPrompt = `
-You are an expert compliance editor for project plans in the financial sector.
-Your task: produce a single, fully revised version of the provided project plan that integrates the suggested recommendations.
-REQUIREMENTS:
+You are a professional compliance editor for project plans in the financial sector.
+Task: produce a single, fully revised version of the provided project plan that integrates the suggested recommendations.
+
+STRICT RULES:
+- Preserve ALL section headings, numbering, bullet points, and spacing exactly as in the original.
+- Do NOT merge or collapse sections or lists.
+- Do NOT invent new sections, budgets, or factual content.
+- Only apply inline edits: grammar, punctuation, sentence clarity, minor rephrasing for compliance alignment.
+- When referencing regulations in recommendations, DO NOT add new regulatory citations not present in the recommendations.
 - Return ONLY the cleaned, full revised document text. Do NOT include diffs, annotations, commentary, or metadata.
-- Preserve all section headings, numbering, lists and factual content unless a minor inline edit improves clarity or compliance.
-- Do not invent budgets, add new major sections, or introduce new regulatory citations that were not present in the recommendations.
-- Use a professional formal tone suitable for regulatory documentation.
 `;
 
     const userPrompt = `
-Original Plan:
----
-${planContent}
----
+Original Plan (preserve formatting exactly between markers):
+<<<START_PLAN>>>
+${normalizedPlan}
+<<<END_PLAN>>>
 
 Findings & Recommendations (use to guide edits):
----
+<<<START_FINDINGS>>>
 ${findingsSummary}
----
+<<<END_FINDINGS>>>
 
-Return the full revised document text only (no explanations).
+Task: Produce the full revised document text only. Keep all headings, numbering, and lists unchanged in structure. Make conservative inline edits to address the recommendations.
 `;
 
-    // helper: extract raw text from response object shape
-    const extractText = (resp: any) => {
-        return (resp?.text ?? resp?.outputText ?? resp?.candidates?.[0]?.content ?? '').toString();
-    };
+    const genai = getGenAIClient();
 
-    // helper: clean diff/code artifacts
-    const cleanOutput = (raw: string) => {
-        let out = String(raw || '');
-        // if wrapped in a fenced block, extract inner content
-        const codeBlockMatch = out.match(/```(?:[\w-]+\n)?([\s\S]*?)```/);
-        if (codeBlockMatch && codeBlockMatch[1]) out = codeBlockMatch[1];
-
-        // remove common diff markers at line starts
-        out = out
-            .split('\n')
-            .map(line => line.replace(/^\s*(\+\+|--|\+|-|>\s|<\s)\s?/, ''))
-            .filter(line => !/^(diff --git|index |@@ |--- |\+\+\+ )/.test(line))
-            .join('\n');
-
-        // strip zero-width/rtf junk and normalize spacing
-        out = out.replace(/[\u200B-\u200F\uFEFF]/g, '').replace(/^\s*{\\rtf1[\s\S]*?}/, '');
-        out = out.replace(/\r\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
-        return out;
-    };
-
-    // token overlap similarity (simple word-set Jaccard)
-    const tokenOverlap = (a: string, b: string) => {
-        const wa = new Set(a.toLowerCase().replace(/[^\w\s]/g, ' ').split(/\s+/).filter(Boolean));
-        const wb = new Set(b.toLowerCase().replace(/[^\w\s]/g, ' ').split(/\s+/).filter(Boolean));
-        if (wa.size === 0 || wb.size === 0) return 0;
-        let inter = 0;
-        wa.forEach(t => { if (wb.has(t)) inter++; });
-        const union = new Set([...wa, ...wb]).size;
-        return inter / Math.max(1, union);
-    };
-
-    // primary request
-    let raw = '';
-    try {
-        const resp = await genai.models.generateContent({
-            model: "gemini-2.5-flash",
-            contents: userPrompt,
-            config: {
-                systemInstruction: systemPrompt,
-            },
-        });
-        raw = extractText(resp).trim();
-    } catch (err) {
-        console.error("improvePlan primary call failed:", err);
-        return planContent;
-    }
-
-    let cleaned = cleanOutput(raw);
-
-    // If cleaned output looks like a diff or is too dissimilar, do a strict second pass
-    const looksLikeDiff = /^(?:\+{1,2}|-{1,2}|diff --git|@@ )/m.test(raw) || tokenOverlap(planContent, cleaned) < 0.6;
-    if (looksLikeDiff) {
+    // Helper to call the model
+    const callModel = async (sys: string, userText: string, modelName = "gemini-2.5-flash", temperature = 0.3) => {
         try {
-            const strictSystem = `
-You are a strictly conservative editor. Make ONLY MINOR INLINE EDITS to the original document to address the provided recommendations.
-DO NOT ADD OR REMOVE SECTIONS, BULLETS, TITLES, NUMBERING, OR BUDGETS.
-Return only the revised full document text with minimal edits.
-`;
-            const strictUser = `
-Original Plan:
----
-${planContent}
----
-
-Previous model output (may contain diffs):
----
-${raw}
----
-
-Findings & Recommendations:
----
-${findingsSummary}
----
-Return only the final revised document text, making minimal inline edits as required.
-`;
-            const resp2 = await genai.models.generateContent({
-                model: "gemini-2.5-flash",
-                contents: strictUser,
-                config: { systemInstruction: strictSystem },
+            const resp = await genai.models.generateContent({
+                model: modelName,
+                contents: userText,
+                config: {
+                    systemInstruction: sys,
+                    responseMimeType: "text/plain",
+                },
             });
-            const raw2 = extractText(resp2).trim();
-            const cleaned2 = cleanOutput(raw2);
-            const sim2 = tokenOverlap(planContent, cleaned2);
-            // Accept second pass if reasonably similar
-            if (sim2 >= 0.5) {
-                cleaned = cleaned2;
-            } else {
-                // As a safe fallback, return the original plan (do not silently replace user content)
-                cleaned = planContent;
-            }
-        } catch (err2) {
-            console.warn("improvePlan strict second pass failed:", err2);
-            cleaned = planContent;
+            return extractTextFromGenAIResponse(resp);
+        } catch (err) {
+            console.error("GenAI call failed:", err);
+            throw err;
         }
+    };
+
+    // First pass (conservative edits + compliance integration)
+    let rawPrimary = '';
+    try {
+        rawPrimary = await callModel(systemPrompt, userPrompt, "gemini-2.5-flash", 0.3);
+    } catch (err) {
+        console.error("Primary improvePlan call failed:", err);
+        // If the primary call fails, return original (fail-safe)
+        return normalizedPlan;
     }
 
-    return cleaned;
+    const cleanedPrimary = cleanOutput(rawPrimary);
+    const simPrimary = tokenOverlap(normalizedPlan, cleanedPrimary);
+    const diffArtifactFound = /^(?:\+{1,2}|-{1,2}|diff --git|@@ )/m.test(rawPrimary);
+    const primaryLooksUnsafe = diffArtifactFound || simPrimary < 0.85;
+
+    if (!primaryLooksUnsafe) {
+        // Primary is acceptable
+        return cleanedPrimary;
+    }
+
+    // Strict fallback: do ONLY minor grammar & punctuation fixes; keep formatting identical
+    const strictSystem = `
+You are a strictly conservative editor. Make ONLY MINOR INLINE EDITS to the original document to address grammar, punctuation, and clarity.
+DO NOT ADD, REMOVE, OR REORDER SECTIONS, HEADINGS, NUMBERING, BULLETS, OR ANY BUDGET INFORMATION.
+Return only the full revised document text, preserving exact structure and formatting.
+`;
+    const strictUser = `
+Original Plan (do not change structure):
+<<<START_PLAN>>>
+${normalizedPlan}
+<<<END_PLAN>>>
+
+Findings & Recommendations (for reference):
+<<<START_FINDINGS>>>
+${findingsSummary}
+<<<END_FINDINGS>>>
+
+Task: Return the final revised plan with minimal inline edits only (grammar/punctuation/clarity).
+`;
+
+    let rawStrict = '';
+    try {
+        rawStrict = await callModel(strictSystem, strictUser, "gemini-2.5-flash", 0.15);
+    } catch (err) {
+        console.error("Strict improvePlan call failed:", err);
+        // return original as a safe fallback
+        return normalizedPlan;
+    }
+
+    const cleanedStrict = cleanOutput(rawStrict);
+    const simStrict = tokenOverlap(normalizedPlan, cleanedStrict);
+
+    // Accept strict output if similarity is reasonably high (ensuring structure preserved)
+    if (simStrict >= 0.80) {
+        return cleanedStrict;
+    }
+
+    // Both passes looked unsafe — return original to avoid making things worse
+    console.warn("Both enhancement passes were unsafe; returning original document unchanged.");
+    return normalizedPlan;
 }
 
-function escapeHtml(str: string) {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-/**
- * Generate inline HTML that highlights changes between original and revised:
- * - additions wrapped in <ins class="added">...</ins>
- * - removals wrapped in <del class="removed">...</del>
- * Caller should render as trusted HTML in the preview pane.
- */
+/* ============================
+   Helper: produce highlighted diff HTML between original and revised
+   (same behavior as original code)
+   ============================ */
 export function highlightChanges(original: string, revised: string): string {
   const parts = diffWordsWithSpace(original || '', revised || '');
+  const escapeHtml = (str: string) =>
+    String(str || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   return parts.map(p => {
     const v = escapeHtml(p.value);
     if (p.added) {
@@ -392,13 +438,15 @@ export function highlightChanges(original: string, revised: string): string {
   }).join('');
 }
 
-
+/* ============================
+   Chat response helper (unchanged)
+   ============================ */
 export async function getChatResponse(documentContent: string, history: ChatMessage[], newMessage: string): Promise<string> {
     const contents = [
-        ...history.map(msg => ({
+        ...history.map(msg => (({
             role: msg.role,
             parts: [{ text: msg.content }]
-        })),
+        }))),
         {
             role: 'user' as const,
             parts: [{ text: newMessage }]
@@ -414,14 +462,17 @@ export async function getChatResponse(documentContent: string, history: ChatMess
             },
         });
 
-        return response.text.trim();
+        return extractTextFromGenAIResponse(response).trim();
     } catch (error) {
         console.error("Error getting chat response from Gemini:", error);
         return "Sorry, I encountered an error while processing your request. Please try again.";
     }
 }
-// Add this new function to src/api/vesta.ts
 
+/* ============================
+   HTTP helper to call a server-side enhancement (if used)
+   (keeps your earlier helper for Netlify function)
+   ============================ */
 export async function improvePlanWithHighlights(planContent: string, report: AnalysisReport): Promise<{ text: string; highlightedHtml: string }> {
     const response = await fetch('/.netlify/functions/enhance', {
         method: 'POST',
@@ -435,10 +486,10 @@ export async function improvePlanWithHighlights(planContent: string, report: Ana
     });
   
     if (!response.ok) {
-        const errorData = await response.json();
+        const errorData = await response.json().catch(() => ({}));
         console.error("API Error from /netlify/functions/enhance:", errorData);
         throw new Error(errorData.error || 'The enhancement process failed.');
     }
   
     return await response.json();
-  }
+}
