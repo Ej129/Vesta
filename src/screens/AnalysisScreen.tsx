@@ -1032,26 +1032,33 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
             })
         );
 
-      const doc = new DocxDocument({
-        sections: [
-          {
-            properties: {
-              page: {
-                margin: { top: 1800, right: 1800, bottom: 1800, left: 1800 }, // ~1.25" margins (twips)
-              } as any,
+        const doc = new DocxDocument({
+          sections: [
+            {
+              properties: {
+                page: {
+                  margin: {
+                    top: 1500,     // ~0.8"
+                    right: 1500,
+                    bottom: 1500,
+                    left: 1500,
+                  },
+                },
+              },
+              children: content.split("\n").map((line) =>
+                new Paragraph({
+                  children: [new TextRun(line)],
+                  alignment: "both",  // justify text
+                  spacing: {
+                    after: 200,       // extra spacing between paragraphs (~0.2")
+                    line: 360,        // 1.5 line spacing
+                  },
+                })
+              ),
             },
-            children: [
-              new Paragraph({
-                children: [new TextRun({ text: title, bold: true, size: 40 })], // title ~20pt
-                alignment: AlignmentType.CENTER,
-                spacing: { after: 240 },
-              }),
-              ...paragraphs,
-            ],
-          },
-        ],
-      });
-
+          ],
+        });
+        
       Packer.toBlob(doc).then((blob) => {
         const url = URL.createObjectURL(blob);
         const link = document.createElement("a");
