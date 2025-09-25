@@ -978,7 +978,7 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
 
       // Body: larger font, wider margins, better line height
       addJustifiedTextToPdf(doc, content, {
-        marginMm: 25,
+        marginMm: 20,
         fontName: "helvetica",
         fontStyle: "normal",
         fontSizePt: 12,
