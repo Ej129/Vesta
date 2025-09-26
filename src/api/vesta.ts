@@ -1,7 +1,14 @@
 // src/api/vesta.ts
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
-import { AnalysisReport, Finding, KnowledgeSource, DismissalRule, CustomRegulation, ChatMessage } from '../types';
-import { diffWordsWithSpace } from 'diff';
+import {
+  AnalysisReport,
+  Finding,
+  KnowledgeSource,
+  DismissalRule,
+  CustomRegulation,
+  ChatMessage,
+} from "../types";
+import { diffWordsWithSpace } from "diff";
 
 let ai: GoogleGenAI | null = null;
 
@@ -10,601 +17,524 @@ let ai: GoogleGenAI | null = null;
  * Throws an error if the API key is not available.
  */
 function getGenAIClient(): GoogleGenAI {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-        throw new Error("GEMINI_API_KEY environment variable is not set. Please configure it in your deployment settings.");
-    }
-    if (!ai) {
-        ai = new GoogleGenAI({ apiKey });
-    }
-    return ai;
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error(
+      "GEMINI_API_KEY environment variable is not set. Please configure it in your deployment settings."
+    );
+  }
+  if (!ai) {
+    ai = new GoogleGenAI({ apiKey });
+  }
+  return ai;
 }
 
 /* -----------------------------
    Report schema (used by analyze calls)
    ----------------------------- */
 const reportSchema = {
-    type: Type.OBJECT,
-    properties: {
-        scores: {
-          type: Type.OBJECT,
-          description: "A breakdown of scores in different categories from 0-100.",
-          properties: {
-            project: {
-              type: Type.INTEGER,
-              description: "Overall project score based on clarity, completeness, feasibility, and number of findings. A high score is good."
-            },
-            strategicGoals: {
-              type: Type.INTEGER,
-              description: "Score indicating alignment with provided strategic goals and in-house documents. A high score is good."
-            },
-            regulations: {
-              type: Type.INTEGER,
-              description: "Score for compliance with provided government regulations. A high score is good."
-            },
-            risk: {
-              type: Type.INTEGER,
-              description: "Score representing how well risks are identified and mitigated. A high score indicates low unmitigated risk."
-            }
-          },
-          required: ["project", "strategicGoals", "regulations", "risk"]
+  type: Type.OBJECT,
+  properties: {
+    scores: {
+      type: Type.OBJECT,
+      description:
+        "A breakdown of scores in different categories from 0-100.",
+      properties: {
+        project: {
+          type: Type.INTEGER,
+          description:
+            "Overall project score based on clarity, completeness, feasibility, and number of findings. A high score is good.",
         },
-        findings: {
-            type: Type.ARRAY,
-            description: "A list of all issues, gaps, and warnings found in the document.",
-            items: {
-                type: Type.OBJECT,
-                properties: {
-                    title: {
-                        type: Type.STRING,
-                        description: "A concise, one-sentence title for the finding.",
-                    },
-                    severity: {
-                        type: Type.STRING,
-                        description: "Severity of the issue. Must be one of: 'critical', 'warning'.",
-                    },
-                    sourceSnippet: {
-                        type: Type.STRING,
-                        description: "The exact, verbatim quote from the project plan that this finding is based on.",
-                    },
-                    recommendation: {
-                        type: Type.STRING,
-                        description: "A detailed, actionable recommendation to fix the issue. If possible, cite relevant regulations like BSP (Bangko Sentral ng Pilipinas) circulars or the Data Privacy Act (RA 10173).",
-                    },
-                },
-                required: ["title", "severity", "sourceSnippet", "recommendation"],
-            },
+        strategicGoals: {
+          type: Type.INTEGER,
+          description:
+            "Score indicating alignment with provided strategic goals and in-house documents. A high score is good.",
         },
+        regulations: {
+          type: Type.INTEGER,
+          description:
+            "Score for compliance with provided government regulations. A high score is good.",
+        },
+        risk: {
+          type: Type.INTEGER,
+          description:
+            "Score representing how well risks are identified and mitigated. A high score indicates low unmitigated risk.",
+        },
+      },
+      required: ["project", "strategicGoals", "regulations", "risk"],
     },
-    required: ["scores", "findings"],
+    findings: {
+      type: Type.ARRAY,
+      description:
+        "A list of all issues, gaps, and warnings found in the document.",
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          title: {
+            type: Type.STRING,
+            description: "A concise, one-sentence title for the finding.",
+          },
+          severity: {
+            type: Type.STRING,
+            description:
+              "Severity of the issue. Must be one of: 'critical', 'warning'.",
+          },
+          sourceSnippet: {
+            type: Type.STRING,
+            description:
+              "The exact, verbatim quote from the project plan that this finding is based on.",
+          },
+          recommendation: {
+            type: Type.STRING,
+            description:
+              "A detailed, actionable recommendation to fix the issue. If possible, cite relevant regulations like BSP circulars or RA 10173.",
+          },
+        },
+        required: ["title", "severity", "sourceSnippet", "recommendation"],
+      },
+    },
+  },
+  required: ["scores", "findings"],
 };
 
 /* ================================
-   Helper: robust text extraction (improved)
-   Attempts to support several SDK response shapes.
+   Helper: robust text extraction
    ================================ */
 const extractTextFromGenAIResponse = (resp: any): string => {
-    if (!resp) return '';
+  if (!resp) return "";
 
-    // Common direct fields
-    if (typeof resp.text === 'string' && resp.text.trim().length > 0) return resp.text.trim();
-    if (typeof resp.outputText === 'string' && resp.outputText.trim().length > 0) return resp.outputText.trim();
+  if (typeof resp.text === "string" && resp.text.trim()) return resp.text.trim();
+  if (typeof resp.outputText === "string" && resp.outputText.trim())
+    return resp.outputText.trim();
 
-    // Some SDK versions put outputs in resp.output (array)
-    if (Array.isArray(resp.output) && resp.output.length > 0) {
-        try {
-            // output items can contain `content` array with items having `text` or `type: "output_text"`
-            const texts: string[] = [];
-            for (const out of resp.output) {
-                if (!out) continue;
-                if (typeof out === 'string' && out.trim()) {
-                    texts.push(out.trim());
-                    continue;
-                }
-                if (Array.isArray(out.content)) {
-                    for (const c of out.content) {
-                        if (!c) continue;
-                        if (typeof c === 'string' && c.trim()) texts.push(c.trim());
-                        else if (typeof c.text === 'string' && c.text.trim()) texts.push(c.text.trim());
-                        else if (c.type === 'output_text' && typeof c.text === 'string' && c.text.trim()) texts.push(c.text.trim());
-                    }
-                } else if (out.text && typeof out.text === 'string') {
-                    texts.push(out.text.trim());
-                }
-            }
-            if (texts.length) return texts.join('\n\n').trim();
-        } catch (e) {
-            // fallback below
-        }
-    }
-
-    // Some responses store candidates
-    if (resp?.candidates && Array.isArray(resp.candidates) && resp.candidates[0]?.content) {
-        return String(resp.candidates[0].content).trim();
-    }
-
-    // Some responses include messages
-    if (resp?.choices && Array.isArray(resp.choices) && resp.choices[0]) {
-        const choice = resp.choices[0];
-        if (choice?.message?.content) return String(choice.message.content).trim();
-        if (choice?.message && typeof choice.message === 'string') return choice.message.trim();
-        if (choice?.text) return String(choice.text).trim();
-    }
-
-    // Last resort: stringify (helpful for debugging but usually not desired)
+  if (Array.isArray(resp.output) && resp.output.length > 0) {
     try {
-        const s = JSON.stringify(resp);
-        return s === '{}' ? '' : s;
+      const texts: string[] = [];
+      for (const out of resp.output) {
+        if (!out) continue;
+        if (typeof out === "string" && out.trim()) {
+          texts.push(out.trim());
+          continue;
+        }
+        if (Array.isArray(out.content)) {
+          for (const c of out.content) {
+            if (!c) continue;
+            if (typeof c === "string" && c.trim()) texts.push(c.trim());
+            else if (c.text && typeof c.text === "string" && c.text.trim())
+              texts.push(c.text.trim());
+          }
+        } else if (out.text && typeof out.text === "string") {
+          texts.push(out.text.trim());
+        }
+      }
+      if (texts.length) return texts.join("\n\n").trim();
     } catch {
-        return String(resp || '');
+      // ignore
     }
+  }
+
+  if (resp?.candidates?.[0]?.content)
+    return String(resp.candidates[0].content).trim();
+
+  if (resp?.choices?.[0]) {
+    const choice = resp.choices[0];
+    if (choice?.message?.content) return String(choice.message.content).trim();
+    if (choice?.message && typeof choice.message === "string")
+      return choice.message.trim();
+    if (choice?.text) return String(choice.text).trim();
+  }
+
+  try {
+    const s = JSON.stringify(resp);
+    return s === "{}" ? "" : s;
+  } catch {
+    return String(resp || "");
+  }
 };
 
 /* ============================
    Utility: clean model output
-   - strips code fences
-   - removes diff artifacts
-   - normalizes whitespace
    ============================ */
 function cleanOutput(raw: string) {
-    let out = String(raw || '');
-    // extract inside fenced code block if present
-    const codeBlockMatch = out.match(/```(?:[\w-]+\n)?([\s\S]*?)```/);
-    if (codeBlockMatch && codeBlockMatch[1]) out = codeBlockMatch[1];
+  let out = String(raw || "");
+  const codeBlockMatch = out.match(/```(?:[\w-]+\n)?([\s\S]*?)```/);
+  if (codeBlockMatch && codeBlockMatch[1]) out = codeBlockMatch[1];
 
-    // remove lines that look like git diffs/patch metadata
-    out = out
-        .split('\n')
-        .map(line => line.replace(/^\s*(\+\+|--|\+|-|>\s|<\s)\s?/, ''))
-        .filter(line => !/^(diff --git|index |@@ |--- |\+\+\+ )/.test(line))
-        .join('\n');
+  out = out
+    .split("\n")
+    .map((line) => line.replace(/^\s*(\+\+|--|\+|-|>\s|<\s)\s?/, ""))
+    .filter(
+      (line) =>
+        !/^(diff --git|index |@@ |--- |\+\+\+ )/.test(line)
+    )
+    .join("\n");
 
-    // strip zero-width and RTF junk
-    out = out.replace(/[\u200B-\u200F\uFEFF]/g, '').replace(/^\s*{\\rtf1[\s\S]*?}/, '');
-    out = out.replace(/\r\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
-    return out;
+  out = out
+    .replace(/[\u200B-\u200F\uFEFF]/g, "")
+    .replace(/^\s*{\\rtf1[\s\S]*?}/, "");
+  out = out.replace(/\r\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  return out;
 }
 
 /* ============================
-   Similarity: token overlap (Jaccard)
-   Returns value in [0,1]
+   Similarity: token overlap
    ============================ */
 function tokenOverlap(a: string, b: string): number {
-    const tokenize = (s: string) =>
-        String(s || '')
-            .toLowerCase()
-            .replace(/[^\w\s]/g, ' ')
-            .split(/\s+/)
-            .filter(Boolean);
+  const tokenize = (s: string) =>
+    String(s || "")
+      .toLowerCase()
+      .replace(/[^\w\s]/g, " ")
+      .split(/\s+/)
+      .filter(Boolean);
 
-    const ta = new Set(tokenize(a));
-    const tb = new Set(tokenize(b));
+  const ta = new Set(tokenize(a));
+  const tb = new Set(tokenize(b));
 
-    if (ta.size === 0 && tb.size === 0) return 1;
-    if (ta.size === 0 || tb.size === 0) return 0;
+  if (ta.size === 0 && tb.size === 0) return 1;
+  if (ta.size === 0 || tb.size === 0) return 0;
 
-    let inter = 0;
-    for (const t of ta) if (tb.has(t)) inter++;
+  let inter = 0;
+  for (const t of ta) if (tb.has(t)) inter++;
 
-    const union = new Set([...ta, ...tb]).size;
-    // Jaccard index
-    const jaccard = inter / Math.max(1, union);
-    return jaccard;
+  const union = new Set([...ta, ...tb]).size;
+  return inter / Math.max(1, union);
 }
 
 /* ============================
-   Primary Analyzer (unchanged logic, but defensive JSON parsing)
+   Analyzer
    ============================ */
-export async function analyzePlan(planContent: string, knowledgeSources: KnowledgeSource[], dismissalRules: DismissalRule[], customRegulations: CustomRegulation[]): Promise<Omit<AnalysisReport, 'id' | 'workspaceId' | 'createdAt'>> {
-    if (!planContent.trim()) {
-        return {
-            title: "Analysis Failed",
-            resilienceScore: 0,
-            scores: { project: 0, strategicGoals: 0, regulations: 0, risk: 0 },
-            findings: [{
-                id: 'error-empty',
-                title: 'Empty Document',
-                severity: 'critical',
-                sourceSnippet: 'N/A',
-                recommendation: 'The submitted document is empty. Please provide a project plan to analyze.',
-                status: 'active',
-            }],
-            summary: { critical: 1, warning: 0, checks: 0 },
-            documentContent: planContent
-        };
-    }
-
-    let contextPrompt = '';
-
-    if (knowledgeSources.length > 0) {
-        const sourcesText = knowledgeSources.map(s => `--- KNOWLEDGE SOURCE: ${s.title} ---\n${s.content}`).join('\n\n');
-        contextPrompt += `\n\nCONTEXTUAL KNOWLEDGE BASE (Use this to inform your analysis):\n${sourcesText}`;
-    }
-
-    if (dismissalRules.length > 0) {
-        const rulesText = dismissalRules.map(r => `- "${r.findingTitle}" (Reason: ${r.reason})`).join('\n');
-        contextPrompt += `\n\nLEARNED DISMISSAL RULES (Do NOT report findings with these titles):\n${rulesText}`;
-    }
-
-    if (customRegulations && customRegulations.length > 0) {
-        const rulesText = customRegulations.map(r => `- ${r.ruleText}`).join('\n');
-        contextPrompt += `\n\nWORKSPACE-SPECIFIC CUSTOM REGULATIONS:\nThese are mandatory requirements for this workspace. For each rule below that is NOT followed by the project plan, you MUST generate a 'critical' finding.\n${rulesText}`;
-    }
-
-    try {
-        const response: GenerateContentResponse = await getGenAIClient().models.generateContent({
-            model: "gemini-2.5-flash",
-            contents: `Analyze the following project plan:\n\n---\n\n${planContent}\n\n---\n\nPlease provide your analysis in the requested JSON format.`,
-            config: {
-                systemInstruction: `You are Vesta, an AI assistant specializing in digital resilience for the financial sector. Analyze project plans against financial regulations (BSP, BIR, Data Privacy Act). Provide findings with title, severity, exact snippet, and actionable recommendation.${contextPrompt}`,
-                responseMimeType: "application/json",
-                responseSchema: reportSchema,
-            },
-        });
-
-        const jsonText = extractTextFromGenAIResponse(response).trim();
-        const parsedReport = JSON.parse(jsonText);
-
-        const criticalCount = parsedReport.findings.filter((f: any) => f.severity === 'critical').length;
-        const warningCount = parsedReport.findings.filter((f: any) => f.severity === 'warning').length;
-        const checksPerformed = Math.floor(1000 + Math.random() * 500);
-
-        return {
-            title: "Project Plan Analysis",
-            resilienceScore: parsedReport.scores.project,
-            scores: parsedReport.scores,
-            findings: parsedReport.findings.map((f: any, index: number): Finding => ({
-                id: `finding-${Date.now()}-${index}`,
-                title: f.title,
-                severity: f.severity,
-                sourceSnippet: f.sourceSnippet,
-                recommendation: f.recommendation,
-                status: 'active',
-            })),
-            summary: {
-                critical: criticalCount,
-                warning: warningCount,
-                checks: checksPerformed,
-            },
-            documentContent: planContent,
-        };
-    } catch (error) {
-        console.error("Error analyzing plan with Gemini:", error);
-        return {
-            title: "Analysis Error",
-            resilienceScore: 0,
-            scores: { project: 0, strategicGoals: 0, regulations: 0, risk: 0 },
-            findings: [{
-                id: 'error-1',
-                title: 'Failed to analyze the document.',
-                severity: 'critical',
-                sourceSnippet: 'N/A',
-                recommendation: `The AI model could not process the document. Error: ${error}`,
-                status: 'active',
-            }],
-            summary: { critical: 1, warning: 0, checks: 0 },
-            documentContent: planContent,
-        };
-    }
-}
-
-// Quick analysis: smaller input and minimal context for speed
-export async function analyzePlanQuick(planContent: string, knowledgeSources: KnowledgeSource[], dismissalRules: DismissalRule[], customRegulations: CustomRegulation[]): Promise<Omit<AnalysisReport, 'id' | 'workspaceId' | 'createdAt'>> {
-    const truncated = String(planContent || '').slice(0, 4000);
-    const minimalSources: KnowledgeSource[] = [];
-    const minimalCustom: CustomRegulation[] = [];
-
-    try {
-        const response: GenerateContentResponse = await getGenAIClient().models.generateContent({
-            model: "gemini-2.5-flash",
-            contents: `Quickly analyze the following project plan (truncated):\n\n---\n\n${truncated}\n\n---`,
-            config: {
-                systemInstruction: `You are Vesta. Provide a fast, approximate assessment with fewer findings. Apply these learned dismissals:\n${(dismissalRules || []).map(r => `- ${r.findingTitle} (${r.reason})`).join('\n')}`,
-                responseMimeType: "application/json",
-                responseSchema: reportSchema,
-            },
-        });
-
-        const jsonText = extractTextFromGenAIResponse(response).trim();
-        const parsedReport = JSON.parse(jsonText);
-
-        const criticalCount = parsedReport.findings.filter((f: any) => f.severity === 'critical').length;
-        const warningCount = parsedReport.findings.filter((f: any) => f.severity === 'warning').length;
-
-        return {
-            title: "Quick Analysis",
-            resilienceScore: parsedReport.scores.project,
-            scores: parsedReport.scores,
-            findings: parsedReport.findings.slice(0, 8).map((f: any, index: number): Finding => ({
-                id: `qfinding-${Date.now()}-${index}`,
-                title: f.title,
-                severity: f.severity,
-                sourceSnippet: f.sourceSnippet,
-                recommendation: f.recommendation,
-                status: 'active',
-            })),
-            summary: {
-                critical: criticalCount,
-                warning: warningCount,
-                checks: 300,
-            },
-            documentContent: truncated,
-        };
-    } catch (error) {
-        console.error("Error during quick analysis:", error);
-        // Fall back to the regular analyzer as a best-effort (still truncated)
-        return analyzePlan(truncated, minimalSources, dismissalRules || [], minimalCustom);
-    }
-}
-
-/* ============================
-   IMPROVE PLAN — two-pass conservative approach (unchanged logic but more defensive)
-   ============================ */
-export async function improvePlan(planContent: string, report: AnalysisReport): Promise<string> {
-    if (!planContent || !planContent.trim()) return planContent;
-    // Build findings summary as bullet list
-    const findingsSummary = (report?.findings || []).map(f =>
-        `- Finding: "${f.title}" (Severity: ${f.severity})\n  - Source Snippet: "${f.sourceSnippet}"\n  - Recommendation: ${f.recommendation}`
-    ).join('\n\n') || 'No findings provided.';
-
-    // Normalise a bit before sending to the model
-    const normalizedPlan = planContent.replace(/\r\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
-
-    // Conservative system prompt (forces inline edits only)
-    const systemPrompt = `
-You are a professional compliance editor for project plans in the financial sector.
-Task: produce a single, fully revised version of the provided project plan that integrates the suggested recommendations.
-
-STRICT RULES:
-- Preserve ALL section headings, numbering, bullet points, and spacing exactly as in the original.
-- Do NOT merge or collapse sections or lists.
-- Do NOT invent new sections, budgets, or factual content.
-- Only apply inline edits: grammar, punctuation, sentence clarity, minor rephrasing for compliance alignment.
-- When referencing regulations in recommendations, DO NOT add new regulatory citations not present in the recommendations.
-- Return ONLY the cleaned, full revised document text. Do NOT include diffs, annotations, commentary, or metadata.
-`;
-
-    const userPrompt = `
-Original Plan (preserve formatting exactly between markers):
-<<<START_PLAN>>>
-${normalizedPlan}
-<<<END_PLAN>>>
-
-Findings & Recommendations (use to guide edits):
-<<<START_FINDINGS>>>
-${findingsSummary}
-<<<END_FINDINGS>>>
-
-Task: Produce the full revised document text only. Keep all headings, numbering, and lists unchanged in structure. Make conservative inline edits to address the recommendations.
-`;
-
-    const genai = getGenAIClient();
-
-    // Helper to call the model
-    const callModel = async (sys: string, userText: string, modelName = "gemini-2.5-flash", temperature = 0.3) => {
-        try {
-            const resp = await genai.models.generateContent({
-                model: modelName,
-                contents: userText,
-                config: {
-                    systemInstruction: sys,
-                    responseMimeType: "text/plain",
-                },
-            });
-            const t = extractTextFromGenAIResponse(resp);
-            // Empty response is considered a failure
-            if (!t || String(t).trim().length === 0) {
-                throw new Error("Empty response from GenAI");
-            }
-            return t;
-        } catch (err) {
-            console.error("GenAI call failed in improvePlan:", err);
-            throw err;
-        }
+export async function analyzePlan(
+  planContent: string,
+  knowledgeSources: KnowledgeSource[],
+  dismissalRules: DismissalRule[],
+  customRegulations: CustomRegulation[]
+): Promise<Omit<AnalysisReport, "id" | "workspaceId" | "createdAt">> {
+  if (!planContent.trim()) {
+    return {
+      title: "Analysis Failed",
+      resilienceScore: 0,
+      scores: { project: 0, strategicGoals: 0, regulations: 0, risk: 0 },
+      findings: [
+        {
+          id: "error-empty",
+          title: "Empty Document",
+          severity: "critical",
+          sourceSnippet: "N/A",
+          recommendation: "The submitted document is empty.",
+          status: "active",
+        },
+      ],
+      summary: { critical: 1, warning: 0, checks: 0 },
+      documentContent: planContent,
     };
+  }
 
-    // First pass (conservative edits + compliance integration)
-    let rawPrimary = '';
-    try {
-        rawPrimary = await callModel(systemPrompt, userPrompt, "gemini-2.5-flash", 0.3);
-    } catch (err) {
-        console.error("Primary improvePlan call failed:", err);
-        // If the primary call fails, return original (fail-safe)
-        return normalizedPlan;
-    }
+  let contextPrompt = "";
+  if (knowledgeSources.length > 0) {
+    const sourcesText = knowledgeSources
+      .map((s) => `--- KNOWLEDGE SOURCE: ${s.title} ---\n${s.content}`)
+      .join("\n\n");
+    contextPrompt += `\n\nCONTEXTUAL KNOWLEDGE:\n${sourcesText}`;
+  }
+  if (dismissalRules.length > 0) {
+    const rulesText = dismissalRules
+      .map((r) => `- "${r.findingTitle}" (${r.reason})`)
+      .join("\n");
+    contextPrompt += `\n\nDISMISSALS:\n${rulesText}`;
+  }
+  if (customRegulations && customRegulations.length > 0) {
+    const rulesText = customRegulations.map((r) => `- ${r.ruleText}`).join("\n");
+    contextPrompt += `\n\nCUSTOM REGS:\n${rulesText}`;
+  }
 
-    const cleanedPrimary = cleanOutput(rawPrimary);
-    const simPrimary = tokenOverlap(normalizedPlan, cleanedPrimary);
-    const diffArtifactFound = /^(?:\+{1,2}|-{1,2}|diff --git|@@ )/m.test(rawPrimary);
-    const primaryLooksUnsafe = diffArtifactFound || simPrimary < 0.85;
+  try {
+    const response: GenerateContentResponse =
+      await getGenAIClient().models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: `Analyze the following project plan:\n${planContent}`,
+        config: {
+          systemInstruction: `You are Vesta. Analyze against BSP, BIR, and PH Gov. ${contextPrompt}`,
+          responseMimeType: "application/json",
+          responseSchema: reportSchema,
+        },
+      });
 
-    if (!primaryLooksUnsafe) {
-        // Primary is acceptable
-        return cleanedPrimary;
-    }
+    const jsonText = extractTextFromGenAIResponse(response).trim();
+    const parsedReport = JSON.parse(jsonText);
 
-    // Strict fallback: do ONLY minor grammar & punctuation fixes; keep formatting identical
-    const strictSystem = `
-You are a strictly conservative editor. Make ONLY MINOR INLINE EDITS to the original document to address grammar, punctuation, and clarity.
-DO NOT ADD, REMOVE, OR REORDER SECTIONS, HEADINGS, NUMBERING, BULLETS, OR ANY BUDGET INFORMATION.
-Return only the full revised document text, preserving exact structure and formatting.
-`;
-    const strictUser = `
-Original Plan (do not change structure):
-<<<START_PLAN>>>
-${normalizedPlan}
-<<<END_PLAN>>>
+    const criticalCount = parsedReport.findings.filter(
+      (f: any) => f.severity === "critical"
+    ).length;
+    const warningCount = parsedReport.findings.filter(
+      (f: any) => f.severity === "warning"
+    ).length;
 
-Findings & Recommendations (for reference):
-<<<START_FINDINGS>>>
-${findingsSummary}
-<<<END_FINDINGS>>>
-
-Task: Return the final revised plan with minimal inline edits only (grammar/punctuation/clarity).
-`;
-
-    let rawStrict = '';
-    try {
-        rawStrict = await callModel(strictSystem, strictUser, "gemini-2.5-flash", 0.15);
-    } catch (err) {
-        console.error("Strict improvePlan call failed:", err);
-        // return original as a safe fallback
-        return normalizedPlan;
-    }
-
-    const cleanedStrict = cleanOutput(rawStrict);
-    const simStrict = tokenOverlap(normalizedPlan, cleanedStrict);
-
-    // Accept strict output if similarity is reasonably high (ensuring structure preserved)
-    if (simStrict >= 0.80) {
-        return cleanedStrict;
-    }
-
-    // Both passes looked unsafe — return original to avoid making things worse
-    console.warn("Both enhancement passes were unsafe; returning original document unchanged.");
-    return normalizedPlan;
+    return {
+      title: "Project Plan Analysis",
+      resilienceScore: parsedReport.scores.project,
+      scores: parsedReport.scores,
+      findings: parsedReport.findings.map(
+        (f: any, i: number): Finding => ({
+          id: `finding-${Date.now()}-${i}`,
+          title: f.title,
+          severity: f.severity,
+          sourceSnippet: f.sourceSnippet,
+          recommendation: f.recommendation,
+          status: "active",
+        })
+      ),
+      summary: { critical: criticalCount, warning: warningCount, checks: 1000 },
+      documentContent: planContent,
+    };
+  } catch (error) {
+    console.error("Error analyzing plan:", error);
+    return {
+      title: "Analysis Error",
+      resilienceScore: 0,
+      scores: { project: 0, strategicGoals: 0, regulations: 0, risk: 0 },
+      findings: [
+        {
+          id: "error-1",
+          title: "Failed to analyze the document.",
+          severity: "critical",
+          sourceSnippet: "N/A",
+          recommendation: `Error: ${error}`,
+          status: "active",
+        },
+      ],
+      summary: { critical: 1, warning: 0, checks: 0 },
+      documentContent: planContent,
+    };
+  }
 }
 
 /* ============================
-   Helper: produce highlighted diff HTML between original and revised
-   (same behavior as original code but returned HTML string)
+   Quick Analyzer
+   ============================ */
+export async function analyzePlanQuick(
+  planContent: string,
+  knowledgeSources: KnowledgeSource[],
+  dismissalRules: DismissalRule[],
+  customRegulations: CustomRegulation[]
+): Promise<Omit<AnalysisReport, "id" | "workspaceId" | "createdAt">> {
+  const truncated = String(planContent || "").slice(0, 4000);
+
+  try {
+    const response: GenerateContentResponse =
+      await getGenAIClient().models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: `Quickly analyze:\n${truncated}`,
+        config: {
+          systemInstruction: `You are Vesta. Fast assessment only.`,
+          responseMimeType: "application/json",
+          responseSchema: reportSchema,
+        },
+      });
+
+    const jsonText = extractTextFromGenAIResponse(response).trim();
+    const parsedReport = JSON.parse(jsonText);
+
+    return {
+      title: "Quick Analysis",
+      resilienceScore: parsedReport.scores.project,
+      scores: parsedReport.scores,
+      findings: parsedReport.findings.slice(0, 8).map(
+        (f: any, i: number): Finding => ({
+          id: `qfinding-${Date.now()}-${i}`,
+          title: f.title,
+          severity: f.severity,
+          sourceSnippet: f.sourceSnippet,
+          recommendation: f.recommendation,
+          status: "active",
+        })
+      ),
+      summary: { critical: 0, warning: 0, checks: 300 },
+      documentContent: truncated,
+    };
+  } catch (error) {
+    console.error("Error quick analysis:", error);
+    return analyzePlan(truncated, [], dismissalRules || [], customRegulations);
+  }
+}
+
+/* ============================
+   IMPROVE PLAN
+   ============================ */
+export async function improvePlan(
+  planContent: string,
+  report: AnalysisReport
+): Promise<string> {
+  if (!planContent || !planContent.trim()) return planContent;
+
+  const findingsSummary =
+    (report?.findings || [])
+      .map(
+        (f) =>
+          `- ${f.title} (${f.severity})\n  Source: "${f.sourceSnippet}"\n  Recommendation: ${f.recommendation}`
+      )
+      .join("\n\n") || "No findings provided.";
+
+  const normalizedPlan = planContent
+    .replace(/\r\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  const systemPrompt = `
+You are a compliance editor for project plans.
+Rules:
+- Preserve headings, numbering, bullets.
+- No new sections or facts.
+- Inline edits only (grammar, clarity, compliance).
+- No new regulatory citations unless present in recommendations.
+Return only the revised document.
+`;
+
+  const userPrompt = `
+Plan:
+${normalizedPlan}
+
+Findings:
+${findingsSummary}
+`;
+
+  const genai = getGenAIClient();
+
+  const callModel = async (sys: string, userText: string) => {
+    const resp = await genai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: userText,
+      config: { systemInstruction: sys, responseMimeType: "text/plain" },
+    });
+    const t = extractTextFromGenAIResponse(resp);
+    if (!t || !t.trim()) throw new Error("Empty response from GenAI");
+    return t;
+  };
+
+  try {
+    const rawPrimary = await callModel(systemPrompt, userPrompt);
+    const cleanedPrimary = cleanOutput(rawPrimary);
+    const sim = tokenOverlap(normalizedPlan, cleanedPrimary);
+    if (sim >= 0.85) return cleanedPrimary;
+  } catch (err) {
+    console.error("Primary improvePlan failed:", err);
+  }
+
+  // fallback: minimal edits
+  try {
+    const strictSystem = `You are a conservative editor. Only fix grammar/punctuation. Preserve structure.`;
+    const rawStrict = await callModel(strictSystem, userPrompt);
+    const cleanedStrict = cleanOutput(rawStrict);
+    return cleanedStrict;
+  } catch (err) {
+    console.error("Strict improvePlan failed:", err);
+    return normalizedPlan;
+  }
+}
+
+/* ============================
+   Highlight changes
    ============================ */
 export function highlightChanges(original: string, revised: string): string {
-  const parts = diffWordsWithSpace(original || '', revised || '');
+  const parts = diffWordsWithSpace(original || "", revised || "");
   const escapeHtml = (str: string) =>
-    String(str || '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
-  return parts.map(p => {
-    const v = escapeHtml(p.value);
-    if (p.added) {
-      return `<ins class="vesta-added" style="background:#e6ffed;color:#064e3b;text-decoration:none;">${v}</ins>`;
-    }
-    if (p.removed) {
-      return `<del class="vesta-removed" style="background:#ffecec;color:#991b1b;text-decoration:line-through;">${v}</del>`;
-    }
-    return v;
-  }).join('');
+    String(str || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  return parts
+    .map((p) => {
+      const v = escapeHtml(p.value);
+      if (p.added) {
+        return `<ins style="background:#e6ffed;color:#064e3b;">${v}</ins>`;
+      }
+      if (p.removed) {
+        return `<del style="background:#ffecec;color:#991b1b;">${v}</del>`;
+      }
+      return v;
+    })
+    .join("");
 }
 
 /* ============================
-   Chat response helper (unchanged but defensive)
+   Chat helper
    ============================ */
-export async function getChatResponse(documentContent: string, history: ChatMessage[], newMessage: string): Promise<string> {
-    const contents = [
-        ...history.map(msg => (({
-            role: msg.role,
-            parts: [{ text: msg.content }]
-        }))),
-        {
-            role: 'user' as const,
-            parts: [{ text: newMessage }]
-        }
-    ];
+export async function getChatResponse(
+  documentContent: string,
+  history: ChatMessage[],
+  newMessage: string
+): Promise<string> {
+  const contents = [
+    ...history.map((m) => ({ role: m.role, parts: [{ text: m.content }] })),
+    { role: "user" as const, parts: [{ text: newMessage }] },
+  ];
 
-    try {
-        const response: GenerateContentResponse = await getGenAIClient().models.generateContent({
-            model: "gemini-2.5-flash",
-            contents: contents,
-            config: {
-                systemInstruction: `You are Vesta, an AI assistant. The user is asking questions about the following document. Use the document as the primary source of truth to answer their questions. Be concise and helpful. If the question cannot be answered from the document, say so. Do not make up information.\n\nDOCUMENT CONTEXT:\n---\n${documentContent}\n---`,
-            },
-        });
-
-        return extractTextFromGenAIResponse(response).trim();
-    } catch (error) {
-        console.error("Error getting chat response from Gemini:", error);
-        return "Sorry, I encountered an error while processing your request. Please try again.";
-    }
-}
-
-/* ============================
-   HTTP helper to call a server-side enhancement (if used)
-   (keeps your earlier helper for Netlify function)
-   ============================ */
-export async function improvePlanWithHighlights(planContent: string, report: AnalysisReport): Promise<{ text: string; highlightedHtml: string }> {
-    const response = await fetch('/.netlify/functions/enhance', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
+  try {
+    const response: GenerateContentResponse =
+      await getGenAIClient().models.generateContent({
+        model: "gemini-2.5-flash",
+        contents,
+        config: {
+          systemInstruction: `You are Vesta. Answer questions about this document:\n${documentContent}`,
         },
-        body: JSON.stringify({
-            planContent,
-            report,
-        }),
-    });
-  
-    if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        console.error("API Error from /netlify/functions/enhance:", errorData);
-        throw new Error(errorData.error || 'The enhancement process failed.');
-    }
-  
-    return await response.json();
+      });
+    return extractTextFromGenAIResponse(response).trim();
+  } catch (error) {
+    console.error("Chat error:", error);
+    return "Error occurred while answering.";
+  }
 }
 
 /* ============================
-   AUTO-ENHANCE REPORT (robust + fallbacks)
-   - Uses improvePlan
-   - If improvePlan fails, tries serverless endpoint (improvePlanWithHighlights)
-   - Returns report with diffContent (HTML) or user-friendly error HTML
+   HTTP helper
    ============================ */
-export async function autoEnhanceReport(report: AnalysisReport): Promise<AnalysisReport> {
-    const planContent = report.documentContent ?? "";
-    if (!planContent.trim()) return report;
+export async function improvePlanWithHighlights(
+  planContent: string,
+  report: AnalysisReport
+): Promise<{ text: string; highlightedHtml: string }> {
+  const resp = await fetch("/.netlify/functions/enhance", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ planContent, report }),
+  });
+  if (!resp.ok) throw new Error("Enhancement API failed.");
+  return await resp.json();
+}
 
+/* ============================
+   AUTO-ENHANCE REPORT
+   ============================ */
+export async function autoEnhanceReport(
+  report: AnalysisReport
+): Promise<AnalysisReport> {
+  const planContent = report.documentContent ?? "";
+  if (!planContent.trim()) return report;
+
+  try {
+    console.info(
+      `[vesta] autoEnhanceReport start — plan length=${planContent.length}`
+    );
+    const revised = await improvePlan(planContent, report);
+    if (!revised || !revised.trim())
+      throw new Error("Empty enhancement result from improvePlan");
+    const diffHtml = highlightChanges(planContent, revised);
+    return { ...report, diffContent: diffHtml };
+  } catch (errPrimary) {
+    console.error("[vesta] autoEnhanceReport primary failed:", errPrimary);
     try {
-        // Primary enhancement using the in-file improvePlan
-        const revised = await improvePlan(planContent, report);
-
-        // If the result is identical (no changes) still produce a diff (no-op) but fine
-        const diffHtml = highlightChanges(planContent, revised);
-
-        // If the revised text is empty for some reason, treat as failure
-        if (!revised || String(revised).trim().length === 0) {
-            throw new Error("Empty enhancement result from improvePlan");
-        }
-
-        return {
-            ...report,
-            diffContent: diffHtml, // HTML with <ins>/<del> that AnalysisScreen expects
-        };
-    } catch (errPrimary) {
-        console.error("autoEnhanceReport: primary improvePlan failed:", errPrimary);
-
-        // Try server-side Netlify function fallback if available (keeps prior behavior)
-        try {
-            const fallback = await improvePlanWithHighlights(planContent, report);
-            if (fallback && (fallback.highlightedHtml || fallback.text)) {
-                return {
-                    ...report,
-                    diffContent: fallback.highlightedHtml || highlightChanges(planContent, fallback.text || planContent),
-                };
-            }
-        } catch (errFallback) {
-            console.error("autoEnhanceReport: fallback serverless enhancement failed:", errFallback);
-        }
-
-        // Final safe fallback — show an explanatory HTML snippet and original document (no changes)
-        const safeHtml = `
-<div style="border:1px solid #f1c0c0;padding:12px;border-radius:8px;background:#fff7f7;color:#611111;">
-  <strong>Enhancement failed:</strong>
-  <div style="margin-top:6px;font-size:13px;">
-    An internal error occurred during enhancement. The original document is shown below. Please check your server logs for details (GEMINI_API_KEY, network, model availability).
-  </div>
-</div>
-<br/>
-<div>
-${highlightChanges(planContent, planContent)}
-</div>
-`.trim();
-
-        return {
-            ...report,
-            diffContent: safeHtml,
-        };
+      const fallback = await improvePlanWithHighlights(planContent, report);
+      return {
+        ...report,
+        diffContent:
+          fallback.highlightedHtml ||
+          highlightChanges(planContent, fallback.text || planContent),
+      };
+    } catch (errFallback) {
+      console.error("[vesta] autoEnhanceReport fallback failed:", errFallback);
+      throw new Error(
+        `Auto-enhance failed. Primary: ${errPrimary}; Fallback: ${errFallback}`
+      );
     }
+  }
 }
