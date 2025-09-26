@@ -911,11 +911,22 @@ const AnalysisScreen: React.FC<AnalysisScreenProps> = ({
   const handleAutoEnhance = async () => {
     if (!currentReport || isEnhancing) return;
     try {
-      await onAutoEnhance?.(currentReport);
+      // Call autoEnhanceReport directly from vesta.ts
+      const enhanced = await vestaApi.autoEnhanceReport(currentReport);
+  
+      // Update local state and bubble up to parent
+      setCurrentReport(enhanced);
+      try {
+        onUpdateReport(enhanced);
+      } catch (err) {
+        console.warn("onUpdateReport failed after auto-enhance:", err);
+      }
     } catch (err) {
       console.error("Auto enhance failed:", err);
+      alert("Enhancement failed: " + String(err));
     }
   };
+  
 
   const handleFindingStatusChange = (findingId: string, status: FindingStatus) => {
     if (!currentReport) return;
