@@ -80,20 +80,71 @@ const reportSchema = {
 };
 
 /* ================================
-   Helper: robust text extraction
+   Helper: robust text extraction (improved)
+   Attempts to support several SDK response shapes.
    ================================ */
 const extractTextFromGenAIResponse = (resp: any): string => {
-    // different SDK fields may exist depending on API version, try common ones
     if (!resp) return '';
-    if (typeof resp.text === 'string' && resp.text.trim().length > 0) return resp.text;
-    if (typeof resp.outputText === 'string' && resp.outputText.trim().length > 0) return resp.outputText;
-    if (resp?.candidates?.[0]?.content) return String(resp.candidates[0].content);
-    // fallback to JSON string of response
-    try { return JSON.stringify(resp); } catch { return String(resp); }
+
+    // Common direct fields
+    if (typeof resp.text === 'string' && resp.text.trim().length > 0) return resp.text.trim();
+    if (typeof resp.outputText === 'string' && resp.outputText.trim().length > 0) return resp.outputText.trim();
+
+    // Some SDK versions put outputs in resp.output (array)
+    if (Array.isArray(resp.output) && resp.output.length > 0) {
+        try {
+            // output items can contain `content` array with items having `text` or `type: "output_text"`
+            const texts: string[] = [];
+            for (const out of resp.output) {
+                if (!out) continue;
+                if (typeof out === 'string' && out.trim()) {
+                    texts.push(out.trim());
+                    continue;
+                }
+                if (Array.isArray(out.content)) {
+                    for (const c of out.content) {
+                        if (!c) continue;
+                        if (typeof c === 'string' && c.trim()) texts.push(c.trim());
+                        else if (typeof c.text === 'string' && c.text.trim()) texts.push(c.text.trim());
+                        else if (c.type === 'output_text' && typeof c.text === 'string' && c.text.trim()) texts.push(c.text.trim());
+                    }
+                } else if (out.text && typeof out.text === 'string') {
+                    texts.push(out.text.trim());
+                }
+            }
+            if (texts.length) return texts.join('\n\n').trim();
+        } catch (e) {
+            // fallback below
+        }
+    }
+
+    // Some responses store candidates
+    if (resp?.candidates && Array.isArray(resp.candidates) && resp.candidates[0]?.content) {
+        return String(resp.candidates[0].content).trim();
+    }
+
+    // Some responses include messages
+    if (resp?.choices && Array.isArray(resp.choices) && resp.choices[0]) {
+        const choice = resp.choices[0];
+        if (choice?.message?.content) return String(choice.message.content).trim();
+        if (choice?.message && typeof choice.message === 'string') return choice.message.trim();
+        if (choice?.text) return String(choice.text).trim();
+    }
+
+    // Last resort: stringify (helpful for debugging but usually not desired)
+    try {
+        const s = JSON.stringify(resp);
+        return s === '{}' ? '' : s;
+    } catch {
+        return String(resp || '');
+    }
 };
 
 /* ============================
    Utility: clean model output
+   - strips code fences
+   - removes diff artifacts
+   - normalizes whitespace
    ============================ */
 function cleanOutput(raw: string) {
     let out = String(raw || '');
@@ -116,6 +167,7 @@ function cleanOutput(raw: string) {
 
 /* ============================
    Similarity: token overlap (Jaccard)
+   Returns value in [0,1]
    ============================ */
 function tokenOverlap(a: string, b: string): number {
     const tokenize = (s: string) =>
@@ -135,11 +187,13 @@ function tokenOverlap(a: string, b: string): number {
     for (const t of ta) if (tb.has(t)) inter++;
 
     const union = new Set([...ta, ...tb]).size;
-    return inter / Math.max(1, union);
+    // Jaccard index
+    const jaccard = inter / Math.max(1, union);
+    return jaccard;
 }
 
 /* ============================
-   Primary Analyzer
+   Primary Analyzer (unchanged logic, but defensive JSON parsing)
    ============================ */
 export async function analyzePlan(planContent: string, knowledgeSources: KnowledgeSource[], dismissalRules: DismissalRule[], customRegulations: CustomRegulation[]): Promise<Omit<AnalysisReport, 'id' | 'workspaceId' | 'createdAt'>> {
     if (!planContent.trim()) {
@@ -234,7 +288,7 @@ export async function analyzePlan(planContent: string, knowledgeSources: Knowled
     }
 }
 
-// Quick analysis
+// Quick analysis: smaller input and minimal context for speed
 export async function analyzePlanQuick(planContent: string, knowledgeSources: KnowledgeSource[], dismissalRules: DismissalRule[], customRegulations: CustomRegulation[]): Promise<Omit<AnalysisReport, 'id' | 'workspaceId' | 'createdAt'>> {
     const truncated = String(planContent || '').slice(0, 4000);
     const minimalSources: KnowledgeSource[] = [];
@@ -278,96 +332,142 @@ export async function analyzePlanQuick(planContent: string, knowledgeSources: Kn
         };
     } catch (error) {
         console.error("Error during quick analysis:", error);
+        // Fall back to the regular analyzer as a best-effort (still truncated)
         return analyzePlan(truncated, minimalSources, dismissalRules || [], minimalCustom);
     }
 }
 
 /* ============================
-   IMPROVE PLAN
+   IMPROVE PLAN — two-pass conservative approach (unchanged logic but more defensive)
    ============================ */
 export async function improvePlan(planContent: string, report: AnalysisReport): Promise<string> {
     if (!planContent || !planContent.trim()) return planContent;
+    // Build findings summary as bullet list
     const findingsSummary = (report?.findings || []).map(f =>
-        `- Finding: "${f.title}" (Severity: ${f.severity})\n  - Source: "${f.sourceSnippet}"\n  - Recommendation: ${f.recommendation}`
+        `- Finding: "${f.title}" (Severity: ${f.severity})\n  - Source Snippet: "${f.sourceSnippet}"\n  - Recommendation: ${f.recommendation}`
     ).join('\n\n') || 'No findings provided.';
 
+    // Normalise a bit before sending to the model
     const normalizedPlan = planContent.replace(/\r\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 
+    // Conservative system prompt (forces inline edits only)
     const systemPrompt = `
-You are a compliance editor for project plans in the financial sector.
-Task: produce a revised version of the plan that integrates recommendations.
+You are a professional compliance editor for project plans in the financial sector.
+Task: produce a single, fully revised version of the provided project plan that integrates the suggested recommendations.
 
-Rules:
-- Preserve all section headings, numbering, and bullet points exactly.
-- Do NOT add new sections or budgets.
-- Only apply inline edits (grammar, clarity, compliance fixes).
-- Do NOT invent new regulatory citations.
-Return ONLY the full revised text.
+STRICT RULES:
+- Preserve ALL section headings, numbering, bullet points, and spacing exactly as in the original.
+- Do NOT merge or collapse sections or lists.
+- Do NOT invent new sections, budgets, or factual content.
+- Only apply inline edits: grammar, punctuation, sentence clarity, minor rephrasing for compliance alignment.
+- When referencing regulations in recommendations, DO NOT add new regulatory citations not present in the recommendations.
+- Return ONLY the cleaned, full revised document text. Do NOT include diffs, annotations, commentary, or metadata.
 `;
 
     const userPrompt = `
-Original Plan:
-<<<START>>>
+Original Plan (preserve formatting exactly between markers):
+<<<START_PLAN>>>
 ${normalizedPlan}
-<<<END>>>
+<<<END_PLAN>>>
 
-Findings & Recommendations:
+Findings & Recommendations (use to guide edits):
+<<<START_FINDINGS>>>
 ${findingsSummary}
+<<<END_FINDINGS>>>
+
+Task: Produce the full revised document text only. Keep all headings, numbering, and lists unchanged in structure. Make conservative inline edits to address the recommendations.
 `;
 
     const genai = getGenAIClient();
 
+    // Helper to call the model
     const callModel = async (sys: string, userText: string, modelName = "gemini-2.5-flash", temperature = 0.3) => {
-        const resp = await genai.models.generateContent({
-            model: modelName,
-            contents: userText,
-            config: {
-                systemInstruction: sys,
-                responseMimeType: "text/plain",
-            },
-        });
-        return extractTextFromGenAIResponse(resp);
+        try {
+            const resp = await genai.models.generateContent({
+                model: modelName,
+                contents: userText,
+                config: {
+                    systemInstruction: sys,
+                    responseMimeType: "text/plain",
+                },
+            });
+            const t = extractTextFromGenAIResponse(resp);
+            // Empty response is considered a failure
+            if (!t || String(t).trim().length === 0) {
+                throw new Error("Empty response from GenAI");
+            }
+            return t;
+        } catch (err) {
+            console.error("GenAI call failed in improvePlan:", err);
+            throw err;
+        }
     };
 
+    // First pass (conservative edits + compliance integration)
     let rawPrimary = '';
     try {
-        rawPrimary = await callModel(systemPrompt, userPrompt);
+        rawPrimary = await callModel(systemPrompt, userPrompt, "gemini-2.5-flash", 0.3);
     } catch (err) {
-        console.error("improvePlan primary failed:", err);
+        console.error("Primary improvePlan call failed:", err);
+        // If the primary call fails, return original (fail-safe)
         return normalizedPlan;
     }
 
     const cleanedPrimary = cleanOutput(rawPrimary);
     const simPrimary = tokenOverlap(normalizedPlan, cleanedPrimary);
     const diffArtifactFound = /^(?:\+{1,2}|-{1,2}|diff --git|@@ )/m.test(rawPrimary);
-    if (!diffArtifactFound && simPrimary >= 0.85) {
+    const primaryLooksUnsafe = diffArtifactFound || simPrimary < 0.85;
+
+    if (!primaryLooksUnsafe) {
+        // Primary is acceptable
         return cleanedPrimary;
     }
 
-    // Fallback strict
-    const strictSystem = `You are a strict editor. Only fix grammar and clarity. Keep structure identical.`;
+    // Strict fallback: do ONLY minor grammar & punctuation fixes; keep formatting identical
+    const strictSystem = `
+You are a strictly conservative editor. Make ONLY MINOR INLINE EDITS to the original document to address grammar, punctuation, and clarity.
+DO NOT ADD, REMOVE, OR REORDER SECTIONS, HEADINGS, NUMBERING, BULLETS, OR ANY BUDGET INFORMATION.
+Return only the full revised document text, preserving exact structure and formatting.
+`;
     const strictUser = `
-Original Plan:
+Original Plan (do not change structure):
+<<<START_PLAN>>>
 ${normalizedPlan}
+<<<END_PLAN>>>
 
-Findings:
+Findings & Recommendations (for reference):
+<<<START_FINDINGS>>>
 ${findingsSummary}
+<<<END_FINDINGS>>>
+
+Task: Return the final revised plan with minimal inline edits only (grammar/punctuation/clarity).
 `;
 
     let rawStrict = '';
     try {
         rawStrict = await callModel(strictSystem, strictUser, "gemini-2.5-flash", 0.15);
-    } catch {
+    } catch (err) {
+        console.error("Strict improvePlan call failed:", err);
+        // return original as a safe fallback
         return normalizedPlan;
     }
 
     const cleanedStrict = cleanOutput(rawStrict);
     const simStrict = tokenOverlap(normalizedPlan, cleanedStrict);
-    return simStrict >= 0.80 ? cleanedStrict : normalizedPlan;
+
+    // Accept strict output if similarity is reasonably high (ensuring structure preserved)
+    if (simStrict >= 0.80) {
+        return cleanedStrict;
+    }
+
+    // Both passes looked unsafe — return original to avoid making things worse
+    console.warn("Both enhancement passes were unsafe; returning original document unchanged.");
+    return normalizedPlan;
 }
 
 /* ============================
-   Highlight Changes
+   Helper: produce highlighted diff HTML between original and revised
+   (same behavior as original code but returned HTML string)
    ============================ */
 export function highlightChanges(original: string, revised: string): string {
   const parts = diffWordsWithSpace(original || '', revised || '');
@@ -381,17 +481,17 @@ export function highlightChanges(original: string, revised: string): string {
   return parts.map(p => {
     const v = escapeHtml(p.value);
     if (p.added) {
-      return `<ins style="background:#e6ffed;color:#064e3b;text-decoration:none;">${v}</ins>`;
+      return `<ins class="vesta-added" style="background:#e6ffed;color:#064e3b;text-decoration:none;">${v}</ins>`;
     }
     if (p.removed) {
-      return `<del style="background:#ffecec;color:#991b1b;text-decoration:line-through;">${v}</del>`;
+      return `<del class="vesta-removed" style="background:#ffecec;color:#991b1b;text-decoration:line-through;">${v}</del>`;
     }
     return v;
   }).join('');
 }
 
 /* ============================
-   Chat Response
+   Chat response helper (unchanged but defensive)
    ============================ */
 export async function getChatResponse(documentContent: string, history: ChatMessage[], newMessage: string): Promise<string> {
     const contents = [
@@ -410,53 +510,101 @@ export async function getChatResponse(documentContent: string, history: ChatMess
             model: "gemini-2.5-flash",
             contents: contents,
             config: {
-                systemInstruction: `You are Vesta, an AI assistant. The user is asking about the document.\n\nDOCUMENT CONTEXT:\n${documentContent}`,
+                systemInstruction: `You are Vesta, an AI assistant. The user is asking questions about the following document. Use the document as the primary source of truth to answer their questions. Be concise and helpful. If the question cannot be answered from the document, say so. Do not make up information.\n\nDOCUMENT CONTEXT:\n---\n${documentContent}\n---`,
             },
         });
 
         return extractTextFromGenAIResponse(response).trim();
     } catch (error) {
-        console.error("Chat error:", error);
-        return "Sorry, I encountered an error while processing your request.";
+        console.error("Error getting chat response from Gemini:", error);
+        return "Sorry, I encountered an error while processing your request. Please try again.";
     }
 }
 
 /* ============================
-   Netlify Enhance Helper
+   HTTP helper to call a server-side enhancement (if used)
+   (keeps your earlier helper for Netlify function)
    ============================ */
 export async function improvePlanWithHighlights(planContent: string, report: AnalysisReport): Promise<{ text: string; highlightedHtml: string }> {
     const response = await fetch('/.netlify/functions/enhance', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ planContent, report }),
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            planContent,
+            report,
+        }),
     });
   
     if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || 'Enhancement failed.');
+        console.error("API Error from /netlify/functions/enhance:", errorData);
+        throw new Error(errorData.error || 'The enhancement process failed.');
     }
   
     return await response.json();
 }
 
 /* ============================
-   AUTO-ENHANCE REPORT (new)
+   AUTO-ENHANCE REPORT (robust + fallbacks)
+   - Uses improvePlan
+   - If improvePlan fails, tries serverless endpoint (improvePlanWithHighlights)
+   - Returns report with diffContent (HTML) or user-friendly error HTML
    ============================ */
 export async function autoEnhanceReport(report: AnalysisReport): Promise<AnalysisReport> {
     const planContent = report.documentContent ?? "";
     if (!planContent.trim()) return report;
 
     try {
+        // Primary enhancement using the in-file improvePlan
         const revised = await improvePlan(planContent, report);
+
+        // If the result is identical (no changes) still produce a diff (no-op) but fine
         const diffHtml = highlightChanges(planContent, revised);
+
+        // If the revised text is empty for some reason, treat as failure
+        if (!revised || String(revised).trim().length === 0) {
+            throw new Error("Empty enhancement result from improvePlan");
+        }
 
         return {
             ...report,
-            diffContent: diffHtml,
+            diffContent: diffHtml, // HTML with <ins>/<del> that AnalysisScreen expects
         };
-    } catch (err) {
-        console
-        console.error("autoEnhanceReport failed:", err);
-        return report; // fallback: return original report unchanged
+    } catch (errPrimary) {
+        console.error("autoEnhanceReport: primary improvePlan failed:", errPrimary);
+
+        // Try server-side Netlify function fallback if available (keeps prior behavior)
+        try {
+            const fallback = await improvePlanWithHighlights(planContent, report);
+            if (fallback && (fallback.highlightedHtml || fallback.text)) {
+                return {
+                    ...report,
+                    diffContent: fallback.highlightedHtml || highlightChanges(planContent, fallback.text || planContent),
+                };
+            }
+        } catch (errFallback) {
+            console.error("autoEnhanceReport: fallback serverless enhancement failed:", errFallback);
+        }
+
+        // Final safe fallback — show an explanatory HTML snippet and original document (no changes)
+        const safeHtml = `
+<div style="border:1px solid #f1c0c0;padding:12px;border-radius:8px;background:#fff7f7;color:#611111;">
+  <strong>Enhancement failed:</strong>
+  <div style="margin-top:6px;font-size:13px;">
+    An internal error occurred during enhancement. The original document is shown below. Please check your server logs for details (GEMINI_API_KEY, network, model availability).
+  </div>
+</div>
+<br/>
+<div>
+${highlightChanges(planContent, planContent)}
+</div>
+`.trim();
+
+        return {
+            ...report,
+            diffContent: safeHtml,
+        };
     }
 }
